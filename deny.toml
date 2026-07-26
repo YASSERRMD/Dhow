@@ -1,0 +1,35 @@
+# cargo-deny configuration
+# https://github.com/EmbarkStudios/cargo-deny
+
+[graph]
+# Reject duplicate versions of the same crate.
+all-features = false
+
+[license]
+# We use BUSL-1.1 for the project. Allow common permissive and copyleft licenses.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "CC0-1.0",
+    "Zlib",
+]
+# BUSL-1.1 is our own license; allow it for our crates.
+confidence-threshold = 0.8
+
+[bans]
+# Deny duplicate versions of the same crate.
+multiple-versions = "deny"
+# Deny wildcard dependencies.
+wildcards = "allow"
+
+[advisories]
+# Deny known security vulnerabilities.
+ignore = [
+    # Add advisory IDs to ignore here with justification.
+]
