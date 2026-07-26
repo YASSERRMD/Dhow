@@ -1,0 +1,13 @@
+[package]
+name = "dhow-ffi"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+dhow-codec = { path = "../dhow-codec" }
+dhow-crypt = { path = "../dhow-crypt" }
