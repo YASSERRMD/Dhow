@@ -2,8 +2,7 @@
 # https://doc.rust-lang.org/cargo/reference/config-files.html
 
 [build]
-# Use all available CPU cores for compilation.
-jobs = 0
+# Use default parallelism (all available CPU cores).
 
 [target.'cfg(target_os = "linux")']
 # On Linux, prefer static linking for release builds.

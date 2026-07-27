@@ -5,7 +5,6 @@
 
 #![forbid(unsafe_code)]
 
-#[allow(dead_code)]
 fn deliberate_lint_error() {
     let x = 1;
 }
