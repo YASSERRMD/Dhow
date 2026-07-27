@@ -1,0 +1,19 @@
+# CODEOWNERS for Dhow
+
+# Rust core
+/core/dhow-codec/ @mdyasser
+/core/dhow-crypt/ @mdyasser
+/core/dhow-ffi/ @mdyasser
+
+# Go CLI
+/cli/ @mdyasser
+
+# Protocol spec
+/proto/ @mdyasser
+
+# CI and scripts
+/.github/ @mdyasser
+/scripts/ @mdyasser
+
+# Docs
+/docs/ @mdyasser

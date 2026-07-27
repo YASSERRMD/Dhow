@@ -5,7 +5,7 @@
 # Reject duplicate versions of the same crate.
 all-features = false
 
-[license]
+[licenses]
 # We use BUSL-1.1 for the project. Allow common permissive and copyleft licenses.
 allow = [
     "MIT",
@@ -18,6 +18,7 @@ allow = [
     "MPL-2.0",
     "CC0-1.0",
     "Zlib",
+    "BUSL-1.1",
 ]
 # BUSL-1.1 is our own license; allow it for our crates.
 confidence-threshold = 0.8

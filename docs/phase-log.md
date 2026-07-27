@@ -1,64 +1,99 @@
 # Phase Log
 
-## Phase 1 - Repository scaffold and toolchain pinning
+## Phase 2 - CI, lint gates, and threat model v0
 
-**Objective:** monorepo skeleton per section 2 of the master prompt; pinned Rust
-and Go toolchains; editorconfig; licence; README stub; `scripts/gate.sh` skeleton.
+**Objective:** CI pipeline running fmt, clippy `-D warnings`, golangci-lint, tests,
+`cargo audit`, `cargo deny`, `govulncheck`; `docs/THREAT-MODEL.md` v0 covering the
+attack surfaces in section 3.
 
-**Gates:** both toolchains build empty workspaces; `gate.sh` runs and exits 0.
+**Gates:** CI green on a deliberately-introduced-then-fixed lint error (prove the
+gate bites); threat model reviewed against section 3 checklist.
 
 ### Planned atomic commits
 
-1. `chore: pin toolchains and add editorconfig, README`
-2. `chore(core): add workspace root Cargo.toml`
-3. `chore(core/dhow-codec): scaffold crate skeleton`
-4. `chore(core/dhow-crypt): scaffold crate skeleton`
-5. `chore(core/dhow-ffi): scaffold crate skeleton`
-6. `chore(cli): scaffold Go module and main entry point`
-7. `chore(proto): scaffold wire-format specification directory`
-8. `chore(fuzz): scaffold fuzzing targets directory`
-9. `chore(scripts): scaffold scripts directory`
-10. `chore(docs): scaffold documentation directory`
-11. `chore(scripts): add gate.sh skeleton`
-12. `docs: add phase-log.md with Phase 1 objective`
-13. `chore: verify both toolchains build empty workspaces`
-14. `chore: verify gate.sh runs and exits 0`
-15. `chore: final verification and cleanup`
-16. `docs: record gate output in phase-log.md`
+1. `chore(ci): add CI workflow with all gate jobs`
+2. `chore: add cargo-deny configuration`
+3. `chore: add golangci-lint configuration`
+4. `docs: add THREAT-MODEL.md v0`
+5. `docs: add phase-log.md with Phase 2 objective`
+6. `chore: add dependabot configuration`
+7. `chore: add CONTRIBUTING.md`
+8. `chore: add CODEOWNERS`
+9. `chore: add .github/PULL_REQUEST_TEMPLATE.md`
+10. `chore: add SECURITY.md`
+11. `chore: add .cargo/config.toml`
+12. `chore: update Makefile with CI targets`
+13. `test: introduce deliberate lint error to prove gate bites`
+14. `fix: resolve deliberate lint error`
+15. `chore: verify cargo audit passes`
+16. `chore: verify cargo deny passes`
+17. `chore: verify golangci-lint passes`
+18. `chore: verify govulncheck passes`
+19. `docs: update threat model with checklist`
+20. `docs: record gate output in phase-log.md`
 
 ### Gate output
 
+#### Gate bites test
+
+Deliberate lint error introduced in `core/dhow-codec/src/lib.rs`:
+
+```rust
+fn deliberate_lint_error() {
+    let x = 1;
+}
 ```
-$ cargo build (in core/)
-   Compiling dhow-codec v0.1.0
-   Compiling dhow-crypt v0.1.0
-   Compiling dhow-ffi v0.1.0
-    Finished `dev` profile [unoptimized + debuginfo] target(s)
 
-$ go build ./... (in cli/)
-(no output - success)
+Result - gate caught it:
 
+```
+=== GATE: cargo clippy -D warnings ===
+error: unused variable: `x`
+ --> dhow-codec/src/lib.rs:9:9
+  |
+9 |     let x = 1;
+  |         ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+error: function `deliberate_lint_error` is never used
+ --> dhow-codec/src/lib.rs:8:4
+  |
+8 | fn deliberate_lint_error() {
+  |    ^^^^^^^^^^^^^^^^^^^^^
+
+GATES FAILED
+EXIT CODE: 1
+```
+
+After fix (removing the function), gate passes.
+
+#### Full gate run
+
+```
 $ ./scripts/gate.sh
 === GATE: cargo fmt --check ===
   PASS
 === GATE: cargo clippy -D warnings ===
-    Finished `dev` profile [unoptimized + debuginfo] target(s)
   PASS
 === GATE: cargo test ===
-    Finished `test` profile [unoptimized + debuginfo] target(s)
-    Running unittests src/lib.rs (dhow_codec)
-    test result: ok. 0 passed; 0 failed; 0 ignored
-    Running unittests src/lib.rs (dhow_crypt)
-    test result: ok. 0 passed; 0 failed; 0 ignored
-    Running unittests src/lib.rs (dhow_ffi)
-    test result: ok. 0 passed; 0 failed; 0 ignored
+  PASS
+=== GATE: cargo audit ===
+    Scanning Cargo.lock for vulnerabilities (3 crate dependencies)
+  PASS
+=== GATE: cargo deny ===
+advisories ok, bans ok, licenses ok, sources ok
   PASS
 === GATE: go vet ===
   PASS
 === GATE: go build ===
   PASS
+=== GATE: golangci-lint ===
+0 issues.
+  PASS
+=== GATE: govulncheck ===
+No vulnerabilities found.
+  PASS
 === GATE SUMMARY ===
-  Passed: 5
+  Passed: 9
   Failed: 0
 ALL GATES PASSED
 ```
@@ -67,5 +102,15 @@ ALL GATES PASSED
 
 ```
 $ git log --oneline main..HEAD | wc -l
-16
+22
 ```
+
+### Threat model review
+
+`docs/THREAT-MODEL.md` v0 covers all attack surfaces from section 3:
+- Hostile frames (malformed, corrupted, replayed) - controls: CRC32C, session binding, adversarial parser
+- Shoulder-surfing of the screen - controls: encryption, session fingerprint
+- Replayed recordings - controls: random session ID, signed manifest
+- Tampered resume files - controls: integrity digest, typed error rejection
+- Malicious datasets (zip bombs, path traversal) - controls: sanitization, limits
+- Compromised receiver storage - controls: `dhow verify`

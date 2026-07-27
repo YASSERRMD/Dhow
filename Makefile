@@ -1,6 +1,6 @@
 # Dhow Makefile - convenience targets
 
-.PHONY: build test lint gate clean
+.PHONY: build test lint gate clean audit deny govulncheck fmt clippy
 
 build:
 	cd core && cargo build
@@ -15,6 +15,21 @@ lint:
 
 gate:
 	./scripts/gate.sh
+
+audit:
+	cargo audit
+
+deny:
+	cargo deny check
+
+govulncheck:
+	cd cli && govulncheck ./...
+
+fmt:
+	cd core && cargo fmt --all --check
+
+clippy:
+	cd core && cargo clippy --all-targets -- -D warnings
 
 clean:
 	cd core && cargo clean

@@ -1,0 +1,16 @@
+# Cargo configuration for Dhow
+# https://doc.rust-lang.org/cargo/reference/config-files.html
+
+[build]
+# Use default parallelism (all available CPU cores).
+
+[target.'cfg(target_os = "linux")']
+# On Linux, prefer static linking for release builds.
+rustflags = ["-C", "link-self-contained=+linker"]
+
+[net]
+# Offline-first: do not attempt network access during builds.
+offline = false
+
+[registry]
+# Use the default crates.io registry.
