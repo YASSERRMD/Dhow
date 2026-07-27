@@ -117,6 +117,8 @@ An attacker with write access to the receiver's storage may:
 | 18 | Resume state integrity digest | Planned (Phase 12) |
 | 19 | Deterministic archive | Planned (Phase 29) |
 | 20 | `dhow verify` for post-transfer verification | Planned (Phase 30) |
+| 21 | Gate bites test (deliberate lint error caught) | Done (Phase 2) |
+| 22 | Threat model reviewed against section 3 checklist | Done (Phase 2) |
 
 ## Open Questions
 
