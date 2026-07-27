@@ -5,7 +5,7 @@
 # Reject duplicate versions of the same crate.
 all-features = false
 
-[license]
+[licenses]
 # We use BUSL-1.1 for the project. Allow common permissive and copyleft licenses.
 allow = [
     "MIT",

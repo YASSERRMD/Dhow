@@ -12,6 +12,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CORE_DIR="$ROOT/core"
 CLI_DIR="$ROOT/cli"
 
+# Ensure Go bin directory is in PATH (for govulncheck, etc.)
+export PATH="$HOME/go/bin:$PATH"
+
 PASS=0
 FAIL=0
 
@@ -39,6 +42,12 @@ run_gate "cargo clippy -D warnings" \
 run_gate "cargo test" \
     cargo test --manifest-path "$CORE_DIR/Cargo.toml" --all-targets
 
+run_gate "cargo audit" \
+    bash -c "cd '$CORE_DIR' && cargo audit"
+
+run_gate "cargo deny" \
+    bash -c "cd '$ROOT' && cargo deny check"
+
 # --- Go gates ---
 
 run_gate "go vet" \
@@ -46,6 +55,12 @@ run_gate "go vet" \
 
 run_gate "go build" \
     bash -c "cd '$CLI_DIR' && go build ./..."
+
+run_gate "golangci-lint" \
+    bash -c "cd '$CLI_DIR' && golangci-lint run ./..."
+
+run_gate "govulncheck" \
+    bash -c "cd '$CLI_DIR' && govulncheck ./..."
 
 # --- Summary ---
 
