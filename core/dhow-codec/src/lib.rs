@@ -4,7 +4,3 @@
 //! It is `#![forbid(unsafe_code)]`.
 
 #![forbid(unsafe_code)]
-
-fn deliberate_lint_error() {
-    let x = 1;
-}
