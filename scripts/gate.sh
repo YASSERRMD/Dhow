@@ -46,7 +46,7 @@ run_gate "cargo audit" \
     bash -c "cd '$CORE_DIR' && cargo audit"
 
 run_gate "cargo deny" \
-    bash -c "cd '$ROOT' && cargo deny check"
+    bash -c "cd '$CORE_DIR' && cargo deny check"
 
 # --- Go gates ---
 
