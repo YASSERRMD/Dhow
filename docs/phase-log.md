@@ -34,4 +34,83 @@ gate bites); threat model reviewed against section 3 checklist.
 
 ### Gate output
 
-(To be filled in by the final commit.)
+#### Gate bites test
+
+Deliberate lint error introduced in `core/dhow-codec/src/lib.rs`:
+
+```rust
+fn deliberate_lint_error() {
+    let x = 1;
+}
+```
+
+Result - gate caught it:
+
+```
+=== GATE: cargo clippy -D warnings ===
+error: unused variable: `x`
+ --> dhow-codec/src/lib.rs:9:9
+  |
+9 |     let x = 1;
+  |         ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+error: function `deliberate_lint_error` is never used
+ --> dhow-codec/src/lib.rs:8:4
+  |
+8 | fn deliberate_lint_error() {
+  |    ^^^^^^^^^^^^^^^^^^^^^
+
+GATES FAILED
+EXIT CODE: 1
+```
+
+After fix (removing the function), gate passes.
+
+#### Full gate run
+
+```
+$ ./scripts/gate.sh
+=== GATE: cargo fmt --check ===
+  PASS
+=== GATE: cargo clippy -D warnings ===
+  PASS
+=== GATE: cargo test ===
+  PASS
+=== GATE: cargo audit ===
+    Scanning Cargo.lock for vulnerabilities (3 crate dependencies)
+  PASS
+=== GATE: cargo deny ===
+advisories ok, bans ok, licenses ok, sources ok
+  PASS
+=== GATE: go vet ===
+  PASS
+=== GATE: go build ===
+  PASS
+=== GATE: golangci-lint ===
+0 issues.
+  PASS
+=== GATE: govulncheck ===
+No vulnerabilities found.
+  PASS
+=== GATE SUMMARY ===
+  Passed: 9
+  Failed: 0
+ALL GATES PASSED
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+22
+```
+
+### Threat model review
+
+`docs/THREAT-MODEL.md` v0 covers all attack surfaces from section 3:
+- Hostile frames (malformed, corrupted, replayed) - controls: CRC32C, session binding, adversarial parser
+- Shoulder-surfing of the screen - controls: encryption, session fingerprint
+- Replayed recordings - controls: random session ID, signed manifest
+- Tampered resume files - controls: integrity digest, typed error rejection
+- Malicious datasets (zip bombs, path traversal) - controls: sanitization, limits
+- Compromised receiver storage - controls: `dhow verify`
