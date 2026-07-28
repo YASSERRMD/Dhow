@@ -146,4 +146,44 @@ sum to declared sizes); vectors committed.
 
 ### Gate output
 
-(To be filled in by the final commit.)
+#### Spec consistency checker
+
+```
+$ python3 scripts/check_spec.py
+=== Dhow Wire-Format Spec Consistency Checker ===
+
+Checking golden vector sizes...
+  PASS
+Checking hex decoding...
+  PASS
+Checking field offsets...
+  PASS
+Checking version bytes...
+  PASS
+Checking endianness...
+  PASS
+
+ALL CHECKS PASSED
+```
+
+#### Golden vector determinism
+
+```
+$ python3 scripts/gen_vectors.py
+Generated 6 golden vectors to proto/vectors.json
+  - frame_header_v1: 46 bytes
+  - session_header_v1: 126 bytes
+  - manifest_header_v1: 168 bytes
+  - resume_header_v1: 96 bytes
+  - manifest_file_entry_v1: 55 bytes
+  - resume_block_entry_v1: 16 bytes
+```
+
+Vectors regenerated and checker passes again (deterministic).
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+20
+```
