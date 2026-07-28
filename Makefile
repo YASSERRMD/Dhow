@@ -1,6 +1,6 @@
 # Dhow Makefile - convenience targets
 
-.PHONY: build test lint gate clean audit deny govulncheck fmt clippy
+.PHONY: build test lint gate clean audit deny govulncheck fmt clippy spec-check vectors
 
 build:
 	cd core && cargo build
@@ -33,3 +33,9 @@ clippy:
 
 clean:
 	cd core && cargo clean
+
+spec-check:
+	python3 scripts/check_spec.py
+
+vectors:
+	python3 scripts/gen_vectors.py
