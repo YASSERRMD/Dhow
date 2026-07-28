@@ -325,6 +325,136 @@ def generate_block_entry_vector() -> dict:
     }
 
 
+def generate_full_manifest_vector() -> dict:
+    """Generate a golden vector for a full manifest with file entries."""
+    magic = b"DHMF"
+    version = 0x01
+    reserved = b"\x00\x00\x00"
+    session_id = TEST_SESSION_ID
+    file_count = 0x00000002
+    total_size = 0x00002000  # 8192 bytes
+    payload_digest = TEST_PAYLOAD_DIGEST
+    reserved2 = b"\x00" * 32
+
+    # Build header (without CRC and signature)
+    header_no_crc = (
+        magic
+        + struct.pack("<B", version)
+        + reserved
+        + session_id
+        + struct.pack("<I", file_count)
+        + struct.pack("<Q", total_size)
+        + payload_digest
+        + reserved2
+    )
+
+    crc = crc32c(header_no_crc)
+    signature = TEST_SIGNATURE
+
+    # Build file entries
+    name1 = b"file1.txt"
+    name2 = b"file2.txt"
+    file_entry1 = (
+        struct.pack("<H", len(name1))
+        + name1
+        + struct.pack("<Q", 0x0000000000001000)
+        + TEST_PAYLOAD_DIGEST
+    )
+    file_entry2 = (
+        struct.pack("<H", len(name2))
+        + name2
+        + struct.pack("<Q", 0x0000000000001000)
+        + TEST_PAYLOAD_DIGEST
+    )
+
+    full_manifest = header_no_crc + struct.pack("<I", crc) + signature + file_entry1 + file_entry2
+
+    return {
+        "name": "full_manifest_v1",
+        "description": "Golden vector for full manifest with file entries v1",
+        "inputs": {
+            "magic": "DHMF",
+            "version": 1,
+            "session_id": session_id.hex(),
+            "file_count": file_count,
+            "total_size": total_size,
+            "payload_digest": payload_digest.hex(),
+            "signature": signature.hex(),
+            "file_entries": [
+                {"name": name1.decode("utf-8"), "size": 0x1000, "digest": TEST_PAYLOAD_DIGEST.hex()},
+                {"name": name2.decode("utf-8"), "size": 0x1000, "digest": TEST_PAYLOAD_DIGEST.hex()},
+            ],
+        },
+        "outputs": {
+            "manifest_hex": full_manifest.hex(),
+            "manifest_size": len(full_manifest),
+            "crc32c": crc,
+        },
+    }
+
+
+def generate_full_resume_vector() -> dict:
+    """Generate a golden vector for a full resume file with block entries."""
+    magic = b"DHRS"
+    version = 0x01
+    reserved = b"\x00\x00\x00"
+    session_id = TEST_SESSION_ID
+    block_count = 0x00000004
+    reserved2 = b"\x00" * 32
+
+    # Build header (without CRC and integrity digest)
+    header_no_crc = (
+        magic
+        + struct.pack("<B", version)
+        + reserved
+        + session_id
+        + struct.pack("<I", block_count)
+        + reserved2
+    )
+
+    crc = crc32c(header_no_crc)
+    integrity_digest = blake3(header_no_crc + struct.pack("<I", crc))
+
+    # Build block entries
+    block_entries = b""
+    for i in range(4):
+        block_index = i
+        symbol_count = 20
+        symbols_held = 16 if i < 2 else 0
+        bitmap = 0xFFFF if i < 2 else 0x0000
+        block_entries += (
+            struct.pack("<I", block_index)
+            + struct.pack("<I", symbol_count)
+            + struct.pack("<I", symbols_held)
+            + struct.pack("<I", bitmap)
+        )
+
+    full_resume = header_no_crc + struct.pack("<I", crc) + integrity_digest + block_entries
+
+    return {
+        "name": "full_resume_v1",
+        "description": "Golden vector for full resume file with block entries v1",
+        "inputs": {
+            "magic": "DHRS",
+            "version": 1,
+            "session_id": session_id.hex(),
+            "block_count": block_count,
+            "block_entries": [
+                {"block_index": 0, "symbol_count": 20, "symbols_held": 16, "bitmap": "ffff"},
+                {"block_index": 1, "symbol_count": 20, "symbols_held": 16, "bitmap": "ffff"},
+                {"block_index": 2, "symbol_count": 20, "symbols_held": 0, "bitmap": "0000"},
+                {"block_index": 3, "symbol_count": 20, "symbols_held": 0, "bitmap": "0000"},
+            ],
+        },
+        "outputs": {
+            "resume_hex": full_resume.hex(),
+            "resume_size": len(full_resume),
+            "crc32c": crc,
+            "integrity_digest": integrity_digest.hex(),
+        },
+    }
+
+
 def main():
     """Generate all golden vectors and write them to a JSON file."""
     vectors = [
@@ -334,6 +464,8 @@ def main():
         generate_resume_header_vector(),
         generate_file_entry_vector(),
         generate_block_entry_vector(),
+        generate_full_manifest_vector(),
+        generate_full_resume_vector(),
     ]
 
     output = {
