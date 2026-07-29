@@ -255,4 +255,32 @@ impl ChunkMap {
         symbol[..info.size as usize].copy_from_slice(&block_payload[start..end]);
         Ok(symbol)
     }
+
+    /// Reassembles the payload from a list of block payloads.
+    ///
+    /// Each block payload must be at least as large as the corresponding block's
+    /// declared size. Only the declared size bytes are used from each block.
+    ///
+    /// Returns `ChunkError::Truncated` if any block payload is too short.
+    pub fn reassemble(&self, blocks: &[&[u8]]) -> Result<Vec<u8>, ChunkError> {
+        if blocks.len() != self.block_count() as usize {
+            return Err(ChunkError::BlockIndexOutOfRange {
+                index: blocks.len() as u32,
+                count: self.block_count(),
+            });
+        }
+        let mut payload = Vec::with_capacity(self.params.payload_size as usize);
+        for (i, block) in blocks.iter().enumerate() {
+            let info = &self.blocks[i];
+            let size = info.size as usize;
+            if block.len() < size {
+                return Err(ChunkError::Truncated {
+                    expected: size,
+                    actual: block.len(),
+                });
+            }
+            payload.extend_from_slice(&block[..size]);
+        }
+        Ok(payload)
+    }
 }
