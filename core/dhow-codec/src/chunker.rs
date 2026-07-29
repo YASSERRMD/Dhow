@@ -227,4 +227,32 @@ impl ChunkMap {
         }
         Ok(&payload[start..end])
     }
+
+    /// Extracts a symbol's bytes from a block's payload, with zero-padding.
+    ///
+    /// The returned vector is always `symbol_size` bytes. If the symbol is the
+    /// last in its block and the block size is not a multiple of the symbol size,
+    /// the trailing bytes are zero-padded.
+    ///
+    /// Returns `ChunkError::Truncated` if the block payload is shorter than expected.
+    pub fn extract_symbol(
+        &self,
+        block_payload: &[u8],
+        block_index: u32,
+        symbol_index: u32,
+    ) -> Result<Vec<u8>, ChunkError> {
+        let info = self.symbol_info(block_index, symbol_index)?;
+        let n = self.params.symbol_size as usize;
+        let start = info.start as usize;
+        let end = start + info.size as usize;
+        if end > block_payload.len() {
+            return Err(ChunkError::Truncated {
+                expected: end,
+                actual: block_payload.len(),
+            });
+        }
+        let mut symbol = vec![0u8; n];
+        symbol[..info.size as usize].copy_from_slice(&block_payload[start..end]);
+        Ok(symbol)
+    }
 }
