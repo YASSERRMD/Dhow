@@ -284,3 +284,130 @@ impl ChunkMap {
         Ok(payload)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chunk_params_validation() {
+        assert!(ChunkParams::new(0, 1, 256).is_ok());
+        assert!(ChunkParams::new(1000, 1, 256).is_ok());
+        assert!(ChunkParams::new(1000, 2, 256).is_ok());
+        assert!(ChunkParams::new(1000, 1, 1).is_ok());
+        assert!(ChunkParams::new(1000, 1, 65535).is_ok());
+
+        assert!(ChunkParams::new(MAX_PAYLOAD_SIZE + 1, 1, 256).is_err());
+        assert!(ChunkParams::new(1000, 0, 256).is_err());
+        assert!(ChunkParams::new(1000, MAX_BLOCK_COUNT + 1, 256).is_err());
+        assert!(ChunkParams::new(1000, 1, 0).is_err());
+        assert!(ChunkParams::new(1000, 1, MAX_SYMBOL_SIZE + 1).is_err());
+    }
+
+    #[test]
+    fn test_chunk_map_simple() {
+        let params = ChunkParams::new(1000, 2, 256).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+
+        assert_eq!(map.block_count(), 2);
+        assert_eq!(map.total_symbols(), 4);
+
+        let block0 = map.block_info(0).unwrap();
+        assert_eq!(block0.start, 0);
+        assert_eq!(block0.size, 500);
+        assert_eq!(block0.symbol_count, 2);
+
+        let block1 = map.block_info(1).unwrap();
+        assert_eq!(block1.start, 500);
+        assert_eq!(block1.size, 500);
+        assert_eq!(block1.symbol_count, 2);
+    }
+
+    #[test]
+    fn test_block_boundaries() {
+        let params = ChunkParams::new(1001, 2, 256).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+
+        let block0 = map.block_info(0).unwrap();
+        assert_eq!(block0.start, 0);
+        assert_eq!(block0.size, 501);
+
+        let block1 = map.block_info(1).unwrap();
+        assert_eq!(block1.start, 501);
+        assert_eq!(block1.size, 500);
+    }
+
+    #[test]
+    fn test_symbol_boundaries() {
+        let params = ChunkParams::new(1000, 2, 256).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+
+        let sym0 = map.symbol_info(0, 0).unwrap();
+        assert_eq!(sym0.start, 0);
+        assert_eq!(sym0.size, 256);
+        assert!(!sym0.padded);
+
+        let sym1 = map.symbol_info(0, 1).unwrap();
+        assert_eq!(sym1.start, 256);
+        assert_eq!(sym1.size, 244);
+        assert!(sym1.padded);
+    }
+
+    #[test]
+    fn test_block_extraction() {
+        let payload: Vec<u8> = (0..1000u32).map(|i| (i % 256) as u8).collect();
+        let params = ChunkParams::new(1000, 2, 256).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+
+        let block0 = map.extract_block(&payload, 0).unwrap();
+        assert_eq!(block0.len(), 500);
+        assert_eq!(&block0[0..4], &[0, 1, 2, 3]);
+
+        let block1 = map.extract_block(&payload, 1).unwrap();
+        assert_eq!(block1.len(), 500);
+        assert_eq!(&block1[0..4], &[244, 245, 246, 247]);
+    }
+
+    #[test]
+    fn test_symbol_extraction() {
+        let payload: Vec<u8> = (0..1000u32).map(|i| (i % 256) as u8).collect();
+        let params = ChunkParams::new(1000, 2, 256).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+
+        let block = map.extract_block(&payload, 0).unwrap();
+        let sym0 = map.extract_symbol(block, 0, 0).unwrap();
+        assert_eq!(sym0.len(), 256);
+        assert_eq!(&sym0[0..4], &[0, 1, 2, 3]);
+
+        let sym1 = map.extract_symbol(block, 0, 1).unwrap();
+        assert_eq!(sym1.len(), 256);
+        assert_eq!(&sym1[0..4], &[0, 1, 2, 3]);
+        assert_eq!(&sym1[244..256], &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_reassembly() {
+        let payload: Vec<u8> = (0..1000u32).map(|i| (i % 256) as u8).collect();
+        let params = ChunkParams::new(1000, 2, 256).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+
+        let block0 = map.extract_block(&payload, 0).unwrap();
+        let block1 = map.extract_block(&payload, 1).unwrap();
+        let reassembled = map.reassemble(&[block0, block1]).unwrap();
+        assert_eq!(reassembled, payload);
+    }
+
+    #[test]
+    fn test_block_index_out_of_range() {
+        let params = ChunkParams::new(1000, 2, 256).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+        assert!(map.block_info(2).is_err());
+    }
+
+    #[test]
+    fn test_symbol_index_out_of_range() {
+        let params = ChunkParams::new(1000, 1, 256).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+        assert!(map.symbol_info(0, 4).is_err());
+    }
+}
