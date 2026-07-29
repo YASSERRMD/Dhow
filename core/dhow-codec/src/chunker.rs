@@ -106,3 +106,77 @@ pub struct ChunkMap {
     /// Information about each block.
     pub blocks: Vec<BlockInfo>,
 }
+
+impl ChunkMap {
+    /// Computes the block layout from chunking parameters.
+    ///
+    /// The payload is divided into `B` blocks. The first `S mod B` blocks have
+    /// `ceil(S / B)` bytes; the remaining blocks have `floor(S / B)` bytes.
+    fn compute_blocks(params: &ChunkParams) -> Result<Vec<BlockInfo>, ChunkError> {
+        let s = params.payload_size;
+        let b = params.block_count as u64;
+        let n = params.symbol_size as u64;
+
+        let remainder = s % b;
+        let large_size = (s + b - 1) / b;
+        let small_size = s / b;
+
+        let mut blocks = Vec::with_capacity(b as usize);
+        let mut offset = 0u64;
+
+        for i in 0..b {
+            let size = if i < remainder { large_size } else { small_size };
+            let symbol_count = if size == 0 {
+                0u32
+            } else {
+                let sc = (size + n - 1) / n;
+                if sc > u32::MAX as u64 {
+                    return Err(ChunkError::InvalidSymbolSize {
+                        size: params.symbol_size,
+                    });
+                }
+                sc as u32
+            };
+            blocks.push(BlockInfo {
+                index: i as u32,
+                start: offset,
+                size,
+                symbol_count,
+            });
+            offset += size;
+        }
+
+        Ok(blocks)
+    }
+
+    /// Creates a new chunk map from chunking parameters.
+    ///
+    /// Returns an error if the parameters are invalid.
+    pub fn new(params: ChunkParams) -> Result<Self, ChunkError> {
+        let blocks = Self::compute_blocks(&params)?;
+        Ok(Self { params, blocks })
+    }
+
+    /// Returns the number of blocks.
+    pub fn block_count(&self) -> u32 {
+        self.blocks.len() as u32
+    }
+
+    /// Returns the total number of symbols across all blocks.
+    pub fn total_symbols(&self) -> u32 {
+        self.blocks.iter().map(|b| b.symbol_count).sum()
+    }
+
+    /// Returns information about a specific block.
+    ///
+    /// Returns `ChunkError::BlockIndexOutOfRange` if the index is out of range.
+    pub fn block_info(&self, index: u32) -> Result<&BlockInfo, ChunkError> {
+        if index >= self.block_count() {
+            return Err(ChunkError::BlockIndexOutOfRange {
+                index,
+                count: self.block_count(),
+            });
+        }
+        Ok(&self.blocks[index as usize])
+    }
+}
