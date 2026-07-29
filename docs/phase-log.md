@@ -33,4 +33,58 @@ fails if payload bytes appear in log output.
 
 ### Gate output
 
-(To be filled in by the final commit.)
+#### Rust tests
+
+```
+$ cargo test --all-targets
+running 8 tests (dhow-codec)
+test result: ok. 8 passed; 0 failed; 0 ignored
+
+running 8 tests (dhow-crypt)
+test result: ok. 8 passed; 0 failed; 0 ignored
+```
+
+#### Go tests
+
+```
+$ go test ./internal/log/ ./internal/errors/ -v
+--- PASS: TestLogSilenceOnDataPath
+--- PASS: TestLogSilentMode
+--- PASS: TestLogLevelFiltering
+--- PASS: TestLogStructuredFields
+--- PASS: TestLogNoPayloadBytes
+--- PASS: TestUserError
+--- PASS: TestUserErrorWithInner
+--- PASS: TestUserErrorUnwrap
+--- PASS: TestInternalError
+--- PASS: TestInternalErrorWithInner
+--- PASS: TestInternalErrorUnwrap
+--- PASS: TestWrap
+--- PASS: TestWrapNil
+--- PASS: TestWrapUser
+--- PASS: TestWrapInternal
+--- PASS: TestErrorChain
+--- PASS: TestNoPayloadInError
+PASS
+```
+
+#### Log silence test
+
+The log silence test (`TestLogSilenceOnDataPath`) verifies that:
+- The logger never outputs payload bytes.
+- The logger never outputs key material.
+- The logger never outputs the word "payload" or "key" (except in session context).
+- A silent logger produces no output.
+
+#### Error type documentation
+
+- `core/dhow-codec/ERRORS.md` documents all 4 error enums (CodecError, ChunkError, FrameError, SessionError, ResumeError).
+- `core/dhow-crypt/ERRORS.md` documents all 5 error enums (CryptError, KeyError, AeadError, SigningError, ManifestError).
+- `cli/internal/errors/CONVENTIONS.md` documents Go error wrapping conventions.
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+20
+```
