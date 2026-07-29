@@ -60,7 +60,10 @@ pub enum FrameError {
 
     /// The session ID does not match the expected session.
     #[error("session ID mismatch: expected {expected:?}, got {actual:?}")]
-    SessionMismatch { expected: [u8; 16], actual: [u8; 16] },
+    SessionMismatch {
+        expected: [u8; 16],
+        actual: [u8; 16],
+    },
 
     /// The truncated MAC does not match.
     #[error("MAC verification failed")]
@@ -202,7 +205,10 @@ mod tests {
 
     #[test]
     fn test_codec_error_from_resume() {
-        let resume_err = ResumeError::Truncated { expected: 100, actual: 50 };
+        let resume_err = ResumeError::Truncated {
+            expected: 100,
+            actual: 50,
+        };
         let codec_err = CodecError::from(resume_err);
         assert!(codec_err.to_string().contains("resume error"));
     }

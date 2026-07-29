@@ -152,13 +152,17 @@ mod tests {
 
     #[test]
     fn test_key_error_display() {
-        let err = KeyError::InvalidKey { details: "bad key".into() };
+        let err = KeyError::InvalidKey {
+            details: "bad key".into(),
+        };
         assert!(err.to_string().contains("invalid key"));
     }
 
     #[test]
     fn test_aead_error_display() {
-        let err = AeadError::DecryptionFailed { details: "wrong key".into() };
+        let err = AeadError::DecryptionFailed {
+            details: "wrong key".into(),
+        };
         assert!(err.to_string().contains("decryption failed"));
     }
 
@@ -170,7 +174,9 @@ mod tests {
 
     #[test]
     fn test_manifest_error_display() {
-        let err = ManifestError::PathTraversal { name: "../../etc/passwd".into() };
+        let err = ManifestError::PathTraversal {
+            name: "../../etc/passwd".into(),
+        };
         assert!(err.to_string().contains("path traversal"));
     }
 
@@ -183,14 +189,18 @@ mod tests {
 
     #[test]
     fn test_crypt_error_from_aead() {
-        let aead_err = AeadError::InvalidNonce { details: "bad nonce".into() };
+        let aead_err = AeadError::InvalidNonce {
+            details: "bad nonce".into(),
+        };
         let crypt_err = CryptError::from(aead_err);
         assert!(crypt_err.to_string().contains("aead error"));
     }
 
     #[test]
     fn test_crypt_error_from_signing() {
-        let signing_err = SigningError::SigningFailed { details: "bad key".into() };
+        let signing_err = SigningError::SigningFailed {
+            details: "bad key".into(),
+        };
         let crypt_err = CryptError::from(signing_err);
         assert!(crypt_err.to_string().contains("signing error"));
     }
