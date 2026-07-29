@@ -210,4 +210,21 @@ impl ChunkMap {
             padded,
         })
     }
+
+    /// Extracts a block's payload from the full payload.
+    ///
+    /// Returns a slice of the payload corresponding to the given block.
+    /// Returns `ChunkError::Truncated` if the payload is shorter than expected.
+    pub fn extract_block<'a>(&self, payload: &'a [u8], block_index: u32) -> Result<&'a [u8], ChunkError> {
+        let block = self.block_info(block_index)?;
+        let start = block.start as usize;
+        let end = start + block.size as usize;
+        if end > payload.len() {
+            return Err(ChunkError::Truncated {
+                expected: end,
+                actual: payload.len(),
+            });
+        }
+        Ok(&payload[start..end])
+    }
 }
