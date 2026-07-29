@@ -179,4 +179,35 @@ impl ChunkMap {
         }
         Ok(&self.blocks[index as usize])
     }
+
+    /// Returns information about a specific symbol within a block.
+    ///
+    /// The symbol size is fixed at `params.symbol_size`. The last symbol of a
+    /// block may contain less actual data and be zero-padded.
+    ///
+    /// Returns `ChunkError::BlockIndexOutOfRange` if the block index is out of range,
+    /// or `ChunkError::SymbolIndexOutOfRange` if the symbol index is out of range.
+    pub fn symbol_info(&self, block_index: u32, symbol_index: u32) -> Result<SymbolInfo, ChunkError> {
+        let block = self.block_info(block_index)?;
+        if symbol_index >= block.symbol_count {
+            return Err(ChunkError::SymbolIndexOutOfRange {
+                index: symbol_index,
+                count: block.symbol_count,
+            });
+        }
+        let n = self.params.symbol_size as u64;
+        let start = symbol_index as u64 * n;
+        let size = if block.size % n != 0 && symbol_index == block.symbol_count - 1 {
+            block.size % n
+        } else {
+            n
+        };
+        let padded = size < n;
+        Ok(SymbolInfo {
+            index: symbol_index,
+            start,
+            size,
+            padded,
+        })
+    }
 }
