@@ -5,6 +5,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod chunker;
+
 use thiserror::Error;
 
 /// Errors that can occur during payload chunking.
