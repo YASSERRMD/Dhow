@@ -2,6 +2,7 @@ package log
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -18,7 +19,7 @@ func TestLogSilenceOnDataPath(t *testing.T) {
 	logger.Info("starting transfer", String("session", "abc123"))
 	logger.Debug("frame received", Int("frame_type", 1), Int("block_index", 0))
 	logger.Warn("frame dropped", Int("frame_index", 5))
-	logger.Error("decode failed", Error("err", strings.NewReader("test error")))
+	logger.Error("decode failed", Error("err", errors.New("test error")))
 
 	output := buf.String()
 
