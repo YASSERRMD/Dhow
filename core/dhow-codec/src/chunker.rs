@@ -288,6 +288,7 @@ impl ChunkMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn test_chunk_params_validation() {
@@ -547,6 +548,95 @@ mod tests {
             for block in &map.blocks {
                 let expected_symbols = (block.size + symbol_size as u64 - 1) / symbol_size as u64;
                 assert_eq!(block.symbol_count, expected_symbols as u32);
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn test_round_trip_identity(
+            payload in proptest::collection::vec(0u8..=255u8, 0..100_000usize),
+            block_count in 1u32..=16,
+            symbol_size in 1u32..=1024,
+        ) {
+            let params = ChunkParams::new(payload.len() as u64, block_count, symbol_size).unwrap();
+            let map = ChunkMap::new(params).unwrap();
+
+            let blocks: Vec<&[u8]> = (0..map.block_count())
+                .map(|i| map.extract_block(&payload, i).unwrap())
+                .collect();
+
+            let reassembled = map.reassemble(&blocks).unwrap();
+            prop_assert_eq!(reassembled, payload);
+        }
+
+        #[test]
+        fn test_block_sizes_sum_to_payload(
+            payload_size in 0u64..100_000,
+            block_count in 1u32..=16,
+            symbol_size in 1u32..=1024,
+        ) {
+            let params = ChunkParams::new(payload_size, block_count, symbol_size).unwrap();
+            let map = ChunkMap::new(params).unwrap();
+            let total: u64 = map.blocks.iter().map(|b| b.size).sum();
+            prop_assert_eq!(total, payload_size);
+        }
+
+        #[test]
+        fn test_block_offsets_continuous(
+            payload_size in 0u64..100_000,
+            block_count in 1u32..=16,
+            symbol_size in 1u32..=1024,
+        ) {
+            let params = ChunkParams::new(payload_size, block_count, symbol_size).unwrap();
+            let map = ChunkMap::new(params).unwrap();
+            for i in 0..map.block_count() {
+                let block = map.block_info(i).unwrap();
+                if i > 0 {
+                    let prev = map.block_info(i - 1).unwrap();
+                    prop_assert_eq!(block.start, prev.start + prev.size);
+                }
+            }
+        }
+
+        #[test]
+        fn test_symbol_count_correct(
+            payload_size in 0u64..100_000,
+            block_count in 1u32..=16,
+            symbol_size in 1u32..=1024,
+        ) {
+            let params = ChunkParams::new(payload_size, block_count, symbol_size).unwrap();
+            let map = ChunkMap::new(params).unwrap();
+            for block in &map.blocks {
+                if block.size == 0 {
+                    prop_assert_eq!(block.symbol_count, 0);
+                } else {
+                    let expected = (block.size + symbol_size as u64 - 1) / symbol_size as u64;
+                    prop_assert_eq!(block.symbol_count, expected as u32);
+                }
+            }
+        }
+
+        #[test]
+        fn test_symbol_extraction_padded(
+            payload_size in 1u64..100_000,
+            block_count in 1u32..=16,
+            symbol_size in 1u32..=1024,
+        ) {
+            let params = ChunkParams::new(payload_size, block_count, symbol_size).unwrap();
+            let map = ChunkMap::new(params).unwrap();
+            for block_idx in 0..map.block_count() {
+                let block = map.block_info(block_idx).unwrap();
+                if block.symbol_count > 0 {
+                    let last_sym = map.symbol_info(block_idx, block.symbol_count - 1).unwrap();
+                    if block.size % symbol_size as u64 != 0 {
+                        prop_assert!(last_sym.padded);
+                        prop_assert_eq!(last_sym.size, block.size % symbol_size as u64);
+                    } else {
+                        prop_assert!(!last_sym.padded);
+                        prop_assert_eq!(last_sym.size, symbol_size as u64);
+                    }
+                }
             }
         }
     }
