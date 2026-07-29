@@ -410,4 +410,144 @@ mod tests {
         let map = ChunkMap::new(params).unwrap();
         assert!(map.symbol_info(0, 4).is_err());
     }
+
+    #[test]
+    fn test_payload_size_zero() {
+        let params = ChunkParams::new(0, 1, 256).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+        assert_eq!(map.block_count(), 1);
+        assert_eq!(map.total_symbols(), 0);
+        let block = map.block_info(0).unwrap();
+        assert_eq!(block.size, 0);
+        assert_eq!(block.symbol_count, 0);
+    }
+
+    #[test]
+    fn test_payload_size_one() {
+        let params = ChunkParams::new(1, 1, 256).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+        assert_eq!(map.block_count(), 1);
+        assert_eq!(map.total_symbols(), 1);
+        let block = map.block_info(0).unwrap();
+        assert_eq!(block.size, 1);
+        let sym = map.symbol_info(0, 0).unwrap();
+        assert_eq!(sym.size, 1);
+        assert!(sym.padded);
+    }
+
+    #[test]
+    fn test_payload_size_exact_multiple() {
+        let params = ChunkParams::new(1024, 2, 256).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+        assert_eq!(map.block_count(), 2);
+        assert_eq!(map.total_symbols(), 4);
+        for i in 0..2 {
+            let block = map.block_info(i).unwrap();
+            assert_eq!(block.size, 512);
+            assert_eq!(block.symbol_count, 2);
+            for j in 0..2 {
+                let sym = map.symbol_info(i, j).unwrap();
+                assert_eq!(sym.size, 256);
+                assert!(!sym.padded);
+            }
+        }
+    }
+
+    #[test]
+    fn test_payload_size_max_simulated() {
+        let params = ChunkParams::new(1024 * 1024, 4, 4096).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+        assert_eq!(map.block_count(), 4);
+        for i in 0..4 {
+            let block = map.block_info(i).unwrap();
+            assert_eq!(block.size, 256 * 1024);
+            assert_eq!(block.symbol_count, 64);
+        }
+    }
+
+    #[test]
+    fn test_symbol_size_one() {
+        let params = ChunkParams::new(10, 2, 1).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+        assert_eq!(map.block_count(), 2);
+        assert_eq!(map.total_symbols(), 10);
+        for i in 0..2 {
+            let block = map.block_info(i).unwrap();
+            assert_eq!(block.size, 5);
+            assert_eq!(block.symbol_count, 5);
+            for j in 0..5 {
+                let sym = map.symbol_info(i, j).unwrap();
+                assert_eq!(sym.size, 1);
+                assert!(!sym.padded);
+            }
+        }
+    }
+
+    #[test]
+    fn test_symbol_size_max() {
+        let params = ChunkParams::new(65535, 1, 65535).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+        assert_eq!(map.block_count(), 1);
+        assert_eq!(map.total_symbols(), 1);
+        let sym = map.symbol_info(0, 0).unwrap();
+        assert_eq!(sym.size, 65535);
+        assert!(!sym.padded);
+    }
+
+    #[test]
+    fn test_block_count_one() {
+        let params = ChunkParams::new(1000, 1, 256).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+        assert_eq!(map.block_count(), 1);
+        let block = map.block_info(0).unwrap();
+        assert_eq!(block.start, 0);
+        assert_eq!(block.size, 1000);
+    }
+
+    #[test]
+    fn test_block_count_max() {
+        let params = ChunkParams::new(1024, MAX_BLOCK_COUNT, 1).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+        assert_eq!(map.block_count(), MAX_BLOCK_COUNT);
+        for i in 0..MAX_BLOCK_COUNT {
+            let block = map.block_info(i).unwrap();
+            assert_eq!(block.size, 1);
+        }
+    }
+
+    #[test]
+    fn test_off_by_one_payload_size() {
+        for size in [255u64, 256, 257, 511, 512, 513, 1023, 1024, 1025] {
+            let params = ChunkParams::new(size, 1, 256).unwrap();
+            let map = ChunkMap::new(params).unwrap();
+            let block = map.block_info(0).unwrap();
+            assert_eq!(block.size, size);
+            let expected_symbols = (size + 255) / 256;
+            assert_eq!(block.symbol_count, expected_symbols as u32);
+        }
+    }
+
+    #[test]
+    fn test_off_by_one_block_count() {
+        for block_count in [1u32, 2, 3, 4, 5] {
+            let payload_size = 1000u64;
+            let params = ChunkParams::new(payload_size, block_count, 256).unwrap();
+            let map = ChunkMap::new(params).unwrap();
+            let total: u64 = map.blocks.iter().map(|b| b.size).sum();
+            assert_eq!(total, payload_size);
+        }
+    }
+
+    #[test]
+    fn test_off_by_one_symbol_size() {
+        let payload_size = 1000u64;
+        for symbol_size in [255u32, 256, 257, 511, 512, 513] {
+            let params = ChunkParams::new(payload_size, 2, symbol_size).unwrap();
+            let map = ChunkMap::new(params).unwrap();
+            for block in &map.blocks {
+                let expected_symbols = (block.size + symbol_size as u64 - 1) / symbol_size as u64;
+                assert_eq!(block.symbol_count, expected_symbols as u32);
+            }
+        }
+    }
 }
