@@ -640,4 +640,51 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_golden_vectors() {
+        let vectors_json = include_str!("../../../proto/vectors.json");
+        let vectors: serde_json::Value = serde_json::from_str(vectors_json).unwrap();
+
+        let chunker_vectors: Vec<&serde_json::Value> = vectors["vectors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| v["name"].as_str().unwrap().starts_with("chunker_"))
+            .collect();
+
+        for vector in chunker_vectors {
+            let name = vector["name"].as_str().unwrap();
+            let payload_size = vector["inputs"]["payload_size"].as_u64().unwrap();
+            let block_count = vector["inputs"]["block_count"].as_u64().unwrap() as u32;
+            let symbol_size = vector["inputs"]["symbol_size"].as_u64().unwrap() as u32;
+
+            let params = ChunkParams::new(payload_size, block_count, symbol_size).unwrap();
+            let map = ChunkMap::new(params).unwrap();
+
+            assert_eq!(map.block_count(), block_count as u32, "block count mismatch in {name}");
+            assert_eq!(
+                map.total_symbols(),
+                vector["outputs"]["total_symbols"].as_u64().unwrap() as u32,
+                "total symbols mismatch in {name}"
+            );
+
+            for (i, block) in map.blocks.iter().enumerate() {
+                let gv = &vector["outputs"]["blocks"][i];
+                assert_eq!(block.index, gv["index"].as_u64().unwrap() as u32, "block index mismatch in {name}");
+                assert_eq!(block.start, gv["start"].as_u64().unwrap(), "block start mismatch in {name}");
+                assert_eq!(block.size, gv["size"].as_u64().unwrap(), "block size mismatch in {name}");
+                assert_eq!(block.symbol_count, gv["symbol_count"].as_u64().unwrap() as u32, "symbol count mismatch in {name}");
+
+                for (j, _) in (0..block.symbol_count).enumerate() {
+                    let sym = map.symbol_info(i as u32, j as u32).unwrap();
+                    let gvs = &gv["symbols"][j];
+                    assert_eq!(sym.index, gvs["index"].as_u64().unwrap() as u32, "symbol index mismatch in {name}");
+                    assert_eq!(sym.start, gvs["start"].as_u64().unwrap(), "symbol start mismatch in {name}");
+                    assert_eq!(sym.size, gvs["size"].as_u64().unwrap(), "symbol size mismatch in {name}");
+                    assert_eq!(sym.padded, gvs["padded"].as_bool().unwrap(), "symbol padded mismatch in {name}");
+                }
+            }
+        }
+    }
 }
