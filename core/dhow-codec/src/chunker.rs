@@ -524,6 +524,28 @@ mod tests {
     }
 
     #[test]
+    fn test_reassemble_wrong_block_count() {
+        let params = ChunkParams::new(1000, 2, 256).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+        let block0 = map.extract_block(&[0u8; 1000], 0).unwrap();
+        assert!(map.reassemble(&[block0]).is_err());
+    }
+
+    #[test]
+    fn test_extract_block_truncated() {
+        let params = ChunkParams::new(1000, 2, 256).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+        assert!(map.extract_block(&[0u8; 400], 1).is_err());
+    }
+
+    #[test]
+    fn test_extract_symbol_truncated() {
+        let params = ChunkParams::new(1000, 1, 256).unwrap();
+        let map = ChunkMap::new(params).unwrap();
+        assert!(map.extract_symbol(&[0u8; 100], 0, 0).is_err());
+    }
+
+    #[test]
     fn test_block_count_one() {
         let params = ChunkParams::new(1000, 1, 256).unwrap();
         let map = ChunkMap::new(params).unwrap();
