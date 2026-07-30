@@ -5,7 +5,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod blake3;
 pub mod chunker;
+pub mod crc32c;
 
 use thiserror::Error;
 
