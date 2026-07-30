@@ -29,6 +29,8 @@ The `dhow-codec` crate uses a hierarchical error type system. The top-level
 | `InvalidSymbolSize` | `size` | Symbol size is zero or too large |
 | `EmptyPayload` | - | Payload is empty |
 | `BlockIndexOutOfRange` | `index`, `count` | Block index exceeds block count |
+| `SymbolIndexOutOfRange` | `index`, `count` | Symbol index exceeds symbol count |
+| `Truncated` | `expected`, `actual` | Payload is shorter than expected |
 
 ### `FrameError`
 

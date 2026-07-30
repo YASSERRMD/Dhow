@@ -5,6 +5,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod chunker;
+
 use thiserror::Error;
 
 /// Errors that can occur during payload chunking.
@@ -29,6 +31,14 @@ pub enum ChunkError {
     /// The block index is out of range.
     #[error("block index {index} out of range (0..{count})")]
     BlockIndexOutOfRange { index: u32, count: u32 },
+
+    /// The symbol index is out of range.
+    #[error("symbol index {index} out of range (0..{count})")]
+    SymbolIndexOutOfRange { index: u32, count: u32 },
+
+    /// The payload is truncated (fewer bytes than expected).
+    #[error("payload truncated: expected {expected} bytes, got {actual}")]
+    Truncated { expected: usize, actual: usize },
 }
 
 /// Errors that can occur during frame encoding or decoding.
