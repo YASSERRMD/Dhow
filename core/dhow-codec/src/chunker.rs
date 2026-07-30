@@ -71,10 +71,10 @@ impl ChunkParams {
                 max: MAX_PAYLOAD_SIZE,
             });
         }
-        if block_count < MIN_BLOCK_COUNT || block_count > MAX_BLOCK_COUNT {
+        if !(MIN_BLOCK_COUNT..=MAX_BLOCK_COUNT).contains(&block_count) {
             return Err(ChunkError::InvalidBlockCount { count: block_count });
         }
-        if symbol_size < MIN_SYMBOL_SIZE || symbol_size > MAX_SYMBOL_SIZE {
+        if !(MIN_SYMBOL_SIZE..=MAX_SYMBOL_SIZE).contains(&symbol_size) {
             return Err(ChunkError::InvalidSymbolSize { size: symbol_size });
         }
         Ok(Self {
@@ -134,18 +134,22 @@ impl ChunkMap {
         let n = params.symbol_size as u64;
 
         let remainder = s % b;
-        let large_size = (s + b - 1) / b;
+        let large_size = s.div_ceil(b);
         let small_size = s / b;
 
         let mut blocks = Vec::with_capacity(b as usize);
         let mut offset = 0u64;
 
         for i in 0..b {
-            let size = if i < remainder { large_size } else { small_size };
+            let size = if i < remainder {
+                large_size
+            } else {
+                small_size
+            };
             let symbol_count = if size == 0 {
                 0u32
             } else {
-                let sc = (size + n - 1) / n;
+                let sc = size.div_ceil(n);
                 if sc > u32::MAX as u64 {
                     return Err(ChunkError::InvalidSymbolSize {
                         size: params.symbol_size,
@@ -203,7 +207,11 @@ impl ChunkMap {
     ///
     /// Returns `ChunkError::BlockIndexOutOfRange` if the block index is out of range,
     /// or `ChunkError::SymbolIndexOutOfRange` if the symbol index is out of range.
-    pub fn symbol_info(&self, block_index: u32, symbol_index: u32) -> Result<SymbolInfo, ChunkError> {
+    pub fn symbol_info(
+        &self,
+        block_index: u32,
+        symbol_index: u32,
+    ) -> Result<SymbolInfo, ChunkError> {
         let block = self.block_info(block_index)?;
         if symbol_index >= block.symbol_count {
             return Err(ChunkError::SymbolIndexOutOfRange {
@@ -231,7 +239,11 @@ impl ChunkMap {
     ///
     /// Returns a slice of the payload corresponding to the given block.
     /// Returns `ChunkError::Truncated` if the payload is shorter than expected.
-    pub fn extract_block<'a>(&self, payload: &'a [u8], block_index: u32) -> Result<&'a [u8], ChunkError> {
+    pub fn extract_block<'a>(
+        &self,
+        payload: &'a [u8],
+        block_index: u32,
+    ) -> Result<&'a [u8], ChunkError> {
         let block = self.block_info(block_index)?;
         let start = block.start as usize;
         let end = start + block.size as usize;
@@ -539,7 +551,7 @@ mod tests {
             let map = ChunkMap::new(params).unwrap();
             let block = map.block_info(0).unwrap();
             assert_eq!(block.size, size);
-            let expected_symbols = (size + 255) / 256;
+            let expected_symbols = size.div_ceil(256);
             assert_eq!(block.symbol_count, expected_symbols as u32);
         }
     }
@@ -562,7 +574,7 @@ mod tests {
             let params = ChunkParams::new(payload_size, 2, symbol_size).unwrap();
             let map = ChunkMap::new(params).unwrap();
             for block in &map.blocks {
-                let expected_symbols = (block.size + symbol_size as u64 - 1) / symbol_size as u64;
+                let expected_symbols = block.size.div_ceil(symbol_size as u64);
                 assert_eq!(block.symbol_count, expected_symbols as u32);
             }
         }
@@ -627,7 +639,7 @@ mod tests {
                 if block.size == 0 {
                     prop_assert_eq!(block.symbol_count, 0);
                 } else {
-                    let expected = (block.size + symbol_size as u64 - 1) / symbol_size as u64;
+                    let expected = block.size.div_ceil(symbol_size as u64);
                     prop_assert_eq!(block.symbol_count, expected as u32);
                 }
             }
@@ -645,7 +657,7 @@ mod tests {
                 let block = map.block_info(block_idx).unwrap();
                 if block.symbol_count > 0 {
                     let last_sym = map.symbol_info(block_idx, block.symbol_count - 1).unwrap();
-                    if block.size % symbol_size as u64 != 0 {
+                    if !block.size.is_multiple_of(symbol_size as u64) {
                         prop_assert!(last_sym.padded);
                         prop_assert_eq!(last_sym.size, block.size % symbol_size as u64);
                     } else {
@@ -678,7 +690,11 @@ mod tests {
             let params = ChunkParams::new(payload_size, block_count, symbol_size).unwrap();
             let map = ChunkMap::new(params).unwrap();
 
-            assert_eq!(map.block_count(), block_count as u32, "block count mismatch in {name}");
+            assert_eq!(
+                map.block_count(),
+                block_count,
+                "block count mismatch in {name}"
+            );
             assert_eq!(
                 map.total_symbols(),
                 vector["outputs"]["total_symbols"].as_u64().unwrap() as u32,
@@ -687,18 +703,50 @@ mod tests {
 
             for (i, block) in map.blocks.iter().enumerate() {
                 let gv = &vector["outputs"]["blocks"][i];
-                assert_eq!(block.index, gv["index"].as_u64().unwrap() as u32, "block index mismatch in {name}");
-                assert_eq!(block.start, gv["start"].as_u64().unwrap(), "block start mismatch in {name}");
-                assert_eq!(block.size, gv["size"].as_u64().unwrap(), "block size mismatch in {name}");
-                assert_eq!(block.symbol_count, gv["symbol_count"].as_u64().unwrap() as u32, "symbol count mismatch in {name}");
+                assert_eq!(
+                    block.index,
+                    gv["index"].as_u64().unwrap() as u32,
+                    "block index mismatch in {name}"
+                );
+                assert_eq!(
+                    block.start,
+                    gv["start"].as_u64().unwrap(),
+                    "block start mismatch in {name}"
+                );
+                assert_eq!(
+                    block.size,
+                    gv["size"].as_u64().unwrap(),
+                    "block size mismatch in {name}"
+                );
+                assert_eq!(
+                    block.symbol_count,
+                    gv["symbol_count"].as_u64().unwrap() as u32,
+                    "symbol count mismatch in {name}"
+                );
 
                 for (j, _) in (0..block.symbol_count).enumerate() {
                     let sym = map.symbol_info(i as u32, j as u32).unwrap();
                     let gvs = &gv["symbols"][j];
-                    assert_eq!(sym.index, gvs["index"].as_u64().unwrap() as u32, "symbol index mismatch in {name}");
-                    assert_eq!(sym.start, gvs["start"].as_u64().unwrap(), "symbol start mismatch in {name}");
-                    assert_eq!(sym.size, gvs["size"].as_u64().unwrap(), "symbol size mismatch in {name}");
-                    assert_eq!(sym.padded, gvs["padded"].as_bool().unwrap(), "symbol padded mismatch in {name}");
+                    assert_eq!(
+                        sym.index,
+                        gvs["index"].as_u64().unwrap() as u32,
+                        "symbol index mismatch in {name}"
+                    );
+                    assert_eq!(
+                        sym.start,
+                        gvs["start"].as_u64().unwrap(),
+                        "symbol start mismatch in {name}"
+                    );
+                    assert_eq!(
+                        sym.size,
+                        gvs["size"].as_u64().unwrap(),
+                        "symbol size mismatch in {name}"
+                    );
+                    assert_eq!(
+                        sym.padded,
+                        gvs["padded"].as_bool().unwrap(),
+                        "symbol padded mismatch in {name}"
+                    );
                 }
             }
         }
