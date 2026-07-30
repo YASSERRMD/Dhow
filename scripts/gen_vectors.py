@@ -455,6 +455,66 @@ def generate_full_resume_vector() -> dict:
     }
 
 
+def generate_chunker_vector(name, payload_size, block_count, symbol_size):
+    """Generate a golden vector for chunker layout."""
+    s = payload_size
+    b = block_count
+    n = symbol_size
+
+    remainder = s % b
+    large_size = (s + b - 1) // b
+    small_size = s // b
+
+    blocks = []
+    offset = 0
+    total_symbols = 0
+
+    for i in range(b):
+        size = large_size if i < remainder else small_size
+        symbol_count = (size + n - 1) // n if size > 0 else 0
+        total_symbols += symbol_count
+
+        symbols = []
+        for j in range(symbol_count):
+            sym_start = j * n
+            if size % n != 0 and j == symbol_count - 1:
+                sym_size = size % n
+                padded = True
+            else:
+                sym_size = n
+                padded = False
+            symbols.append({
+                "index": j,
+                "start": sym_start,
+                "size": sym_size,
+                "padded": padded,
+            })
+
+        blocks.append({
+            "index": i,
+            "start": offset,
+            "size": size,
+            "symbol_count": symbol_count,
+            "symbols": symbols,
+        })
+        offset += size
+
+    return {
+        "name": name,
+        "description": f"Golden vector for chunker: payload_size={payload_size}, block_count={block_count}, symbol_size={symbol_size}",
+        "inputs": {
+            "payload_size": payload_size,
+            "block_count": block_count,
+            "symbol_size": symbol_size,
+        },
+        "outputs": {
+            "block_count": b,
+            "total_symbols": total_symbols,
+            "blocks": blocks,
+        },
+    }
+
+
 def main():
     """Generate all golden vectors and write them to a JSON file."""
     vectors = [
@@ -466,6 +526,13 @@ def main():
         generate_block_entry_vector(),
         generate_full_manifest_vector(),
         generate_full_resume_vector(),
+        generate_chunker_vector("chunker_simple_v1", 1000, 2, 256),
+        generate_chunker_vector("chunker_remainder_v1", 1001, 2, 256),
+        generate_chunker_vector("chunker_padding_v1", 1000, 1, 256),
+        generate_chunker_vector("chunker_exact_multiple_v1", 1024, 2, 256),
+        generate_chunker_vector("chunker_single_byte_v1", 1, 1, 256),
+        generate_chunker_vector("chunker_empty_v1", 0, 1, 256),
+        generate_chunker_vector("chunker_symbol_size_one_v1", 10, 2, 1),
     ]
 
     output = {
