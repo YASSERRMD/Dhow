@@ -1,5 +1,31 @@
 # Phase Log
 
+## Phase 6 - Integrity primitives
+
+**Objective:** CRC32C and BLAKE3 wrappers with streaming interfaces; per-block
+and whole-payload digests per spec.
+
+**Gates:** known-answer tests against published vectors; streaming equals one-shot
+on random inputs.
+
+### Planned atomic commits
+
+1. `docs: add phase-log.md with Phase 6 objective`
+2. `feat(codec): add crc32c module skeleton`
+3. `feat(codec): add crc32c one-shot function`
+4. `feat(codec): add crc32c streaming hasher`
+5. `test(codec): add crc32c known-answer tests`
+6. `test(codec): add crc32c streaming equals one-shot test`
+7. `feat(codec): add blake3 module skeleton`
+8. `feat(codec): add blake3 one-shot function`
+9. `feat(codec): add blake3 streaming hasher`
+10. `test(codec): add blake3 known-answer tests`
+11. `test(codec): add blake3 streaming equals one-shot test`
+12. `test(codec): add integrity digest round-trip tests`
+13. `docs(codec): document integrity primitives module`
+14. `chore: add crc32c and blake3 dependencies`
+15. `chore: verify integrity primitives gates pass`
+
 ## Phase 5 - Chunker
 
 **Objective:** Deterministic payload chunking into source blocks and symbols per
