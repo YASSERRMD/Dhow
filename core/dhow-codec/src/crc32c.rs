@@ -62,3 +62,48 @@ fn crc32c_append(state: u32, data: &[u8]) -> u32 {
     }
     crc ^ 0xFFFFFFFF
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_crc32c_known_answers() {
+        assert_eq!(crc32c_digest(b""), 0);
+        assert_eq!(crc32c_digest(b"123456789"), 0xE8D5_94D9);
+        assert_eq!(
+            crc32c_digest(b"The quick brown fox jumps over the lazy dog"),
+            crc32c::crc32c(b"The quick brown fox jumps over the lazy dog")
+        );
+    }
+
+    #[test]
+    fn test_crc32c_streaming_equals_one_shot() {
+        let data: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+
+        let one_shot = crc32c_digest(&data);
+
+        let mut hasher = Crc32cHasher::new();
+        hasher.update(&data[..100]);
+        hasher.update(&data[100..500]);
+        hasher.update(&data[500..]);
+        let streaming = hasher.finalize();
+
+        assert_eq!(one_shot, streaming);
+    }
+
+    #[test]
+    fn test_crc32c_streaming_empty() {
+        let hasher = Crc32cHasher::new();
+        let result = hasher.finalize();
+        assert_eq!(result, crc32c_digest(b""));
+    }
+
+    #[test]
+    fn test_crc32c_streaming_single_byte() {
+        let mut hasher = Crc32cHasher::new();
+        hasher.update(&[0x42]);
+        let result = hasher.finalize();
+        assert_eq!(result, crc32c_digest(&[0x42]));
+    }
+}
