@@ -9,6 +9,22 @@
 //!
 //! All operations are deterministic: given the same input parameters, the same
 //! chunk layout is always produced.
+//!
+//! # Example
+//!
+//! ```
+//! use dhow_codec::chunker::{ChunkParams, ChunkMap};
+//!
+//! let params = ChunkParams::new(1000, 2, 256).unwrap();
+//! let map = ChunkMap::new(params).unwrap();
+//!
+//! assert_eq!(map.block_count(), 2);
+//! assert_eq!(map.total_symbols(), 4);
+//!
+//! let block0 = map.block_info(0).unwrap();
+//! assert_eq!(block0.size, 500);
+//! assert_eq!(block0.symbol_count, 2);
+//! ```
 
 /// Maximum payload size: 4 GiB.
 pub const MAX_PAYLOAD_SIZE: u64 = 4 * 1024 * 1024 * 1024;
