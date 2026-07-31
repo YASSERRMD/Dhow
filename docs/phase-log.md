@@ -8,23 +8,40 @@ and whole-payload digests per spec.
 **Gates:** known-answer tests against published vectors; streaming equals one-shot
 on random inputs.
 
-### Planned atomic commits
+### Gate output
 
-1. `docs: add phase-log.md with Phase 6 objective`
-2. `feat(codec): add crc32c module skeleton`
-3. `feat(codec): add crc32c one-shot function`
-4. `feat(codec): add crc32c streaming hasher`
-5. `test(codec): add crc32c known-answer tests`
-6. `test(codec): add crc32c streaming equals one-shot test`
-7. `feat(codec): add blake3 module skeleton`
-8. `feat(codec): add blake3 one-shot function`
-9. `feat(codec): add blake3 streaming hasher`
-10. `test(codec): add blake3 known-answer tests`
-11. `test(codec): add blake3 streaming equals one-shot test`
-12. `test(codec): add integrity digest round-trip tests`
-13. `docs(codec): document integrity primitives module`
-14. `chore: add crc32c and blake3 dependencies`
-15. `chore: verify integrity primitives gates pass`
+#### Rust tests
+
+```
+$ cargo test --all-targets
+running 55 tests (dhow-codec)
+test result: ok. 55 passed; 0 failed; 0 ignored
+
+running 8 tests (dhow-crypt)
+test result: ok. 8 passed; 0 failed; 0 ignored
+
+running 0 tests (dhow-ffi)
+test result: ok. 0 passed; 0 failed; 0 ignored
+```
+
+#### Clippy
+```
+$ cargo clippy -D warnings
+    Finished `dev` profile [unoptimized + debuginfo]
+```
+
+#### Security audit
+```
+$ cargo audit
+error: 0 vulnerabilities found
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+21
+```
 
 ## Phase 5 - Chunker
 
