@@ -120,4 +120,15 @@ mod tests {
         let data: Vec<u8> = (0..=255).collect();
         assert_eq!(result, blake3_digest(&data));
     }
+
+    #[test]
+    fn test_blake3_large_input_chunked() {
+        let data: Vec<u8> = (0..50_000).map(|i| (i * 3) as u8).collect();
+        let one_shot = blake3_digest(&data);
+        let mut hasher = Blake3Hasher::new();
+        for chunk in data.chunks(511) {
+            hasher.update(chunk);
+        }
+        assert_eq!(hasher.finalize(), one_shot);
+    }
 }
