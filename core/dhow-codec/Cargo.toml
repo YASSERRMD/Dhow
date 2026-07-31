@@ -7,7 +7,6 @@ repository.workspace = true
 
 [dependencies]
 thiserror = "2.0"
-crc32c = "0.6"
 blake3 = "1.5"
 
 [dev-dependencies]

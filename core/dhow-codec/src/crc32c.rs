@@ -3,17 +3,43 @@
 //! Provides both one-shot and streaming CRC32C computation. CRC32C is used
 //! for fast integrity checks in the frame header and session header.
 //!
-//! The polynomial used is Castagnoli (0x82F63B78 reversed), which provides
+//! The polynomial used is Castagnoli (0x82F63B78 reflected), which provides
 //! better error detection than standard CRC32 for small messages.
 
-use crc32c::crc32c;
+const CRC32C_POLY: u32 = 0x82F63B78;
+
+const fn make_table() -> [u32; 256] {
+    let mut t = [0u32; 256];
+    let mut n = 0u32;
+    while n < 256 {
+        let mut crc = n;
+        let mut i = 0u32;
+        while i < 8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ CRC32C_POLY;
+            } else {
+                crc >>= 1;
+            }
+            i += 1;
+        }
+        t[n as usize] = crc;
+        n += 1;
+    }
+    t
+}
+
+const CRC_TABLE: [u32; 256] = make_table();
 
 /// Computes the CRC32C checksum of the given data (one-shot).
 ///
 /// This is the simplest interface for computing a CRC32C when the entire
 /// input is available in memory.
 pub fn crc32c_digest(data: &[u8]) -> u32 {
-    crc32c(data)
+    let mut crc = 0xFFFFFFFFu32;
+    for &byte in data {
+        crc = CRC_TABLE[((crc ^ byte as u32) & 0xFF) as usize] ^ (crc >> 8);
+    }
+    crc ^ 0xFFFFFFFF
 }
 
 /// A streaming CRC32C hasher.
@@ -51,14 +77,7 @@ impl Default for Crc32cHasher {
 fn crc32c_append(state: u32, data: &[u8]) -> u32 {
     let mut crc = state ^ 0xFFFFFFFF;
     for &byte in data {
-        crc ^= byte as u32;
-        for _ in 0..8 {
-            if crc & 1 != 0 {
-                crc = (crc >> 1) ^ 0x82F63B78;
-            } else {
-                crc >>= 1;
-            }
-        }
+        crc = CRC_TABLE[((crc ^ byte as u32) & 0xFF) as usize] ^ (crc >> 8);
     }
     crc ^ 0xFFFFFFFF
 }
@@ -72,6 +91,7 @@ mod tests {
         assert_eq!(crc32c_digest(b""), 0);
         assert_eq!(crc32c_digest(b"123456789"), 0xE306_9283);
         assert_eq!(crc32c_digest(b"Hello world!"), 0x7B98_E751);
+        assert_eq!(crc32c_digest(b"a"), 0xC1D0_4330);
     }
 
     #[test]
@@ -107,11 +127,11 @@ mod tests {
     #[test]
     fn test_crc32c_streaming_single_byte_incremental() {
         let mut hasher = Crc32cHasher::new();
-        for i in 0..256u8 {
+        for i in 0..=255u8 {
             hasher.update(&[i]);
         }
         let result = hasher.finalize();
-        let data: Vec<u8> = (0..256).collect();
+        let data: Vec<u8> = (0..=255).collect();
         assert_eq!(result, crc32c_digest(&data));
     }
 }
