@@ -65,4 +65,21 @@ mod tests {
         assert_ne!(crc32c_digest(data1), crc32c_digest(data2));
         assert_ne!(blake3_digest(data1), blake3_digest(data2));
     }
+
+    #[test]
+    fn test_integrity_digests_with_empty_input() {
+        assert_eq!(crc32c_digest(b""), 0);
+        assert_eq!(
+            blake3_digest(b""),
+            hex_literal("af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262")
+        );
+    }
+
+    fn hex_literal(s: &str) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for (i, pair) in s.as_bytes().chunks(2).enumerate() {
+            out[i] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+        }
+        out
+    }
 }
