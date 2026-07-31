@@ -5,6 +5,14 @@
 //! signed manifest.
 //!
 //! BLAKE3 produces 32-byte (256-bit) digests.
+//!
+//! # Example
+//!
+//! ```
+//! use dhow_codec::blake3::{blake3_digest, DIGEST_LEN};
+//! let digest = blake3_digest(b"123456789");
+//! assert_eq!(digest.len(), DIGEST_LEN);
+//! ```
 
 /// The length of a BLAKE3 digest in bytes.
 pub const DIGEST_LEN: usize = 32;
