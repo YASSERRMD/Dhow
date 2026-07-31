@@ -103,4 +103,15 @@ mod tests {
         let result = hasher.finalize();
         assert_eq!(result, crc32c_digest(&[0x42]));
     }
+
+    #[test]
+    fn test_crc32c_streaming_single_byte_incremental() {
+        let mut hasher = Crc32cHasher::new();
+        for i in 0..256u8 {
+            hasher.update(&[i]);
+        }
+        let result = hasher.finalize();
+        let data: Vec<u8> = (0..256).collect();
+        assert_eq!(result, crc32c_digest(&data));
+    }
 }
