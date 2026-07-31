@@ -131,4 +131,15 @@ mod tests {
         }
         assert_eq!(hasher.finalize(), one_shot);
     }
+
+    #[test]
+    fn test_blake3_streaming_with_empty_updates() {
+        let data = b"test data for empty update";
+        let one_shot = blake3_digest(data);
+        let mut hasher = Blake3Hasher::new();
+        hasher.update(&[]);
+        hasher.update(data);
+        hasher.update(&[]);
+        assert_eq!(hasher.finalize(), one_shot);
+    }
 }
