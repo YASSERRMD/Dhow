@@ -114,6 +114,7 @@ mod tests {
         assert_eq!(crc32c_digest(b"123456789"), 0xE306_9283);
         assert_eq!(crc32c_digest(b"Hello world!"), 0x7B98_E751);
         assert_eq!(crc32c_digest(b"a"), 0xC1D0_4330);
+        assert_eq!(crc32c_digest(b"\x00"), 0x527D_5351);
     }
 
     #[test]
