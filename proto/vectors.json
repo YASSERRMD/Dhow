@@ -187,6 +187,360 @@
         "crc32c": 1226144412,
         "integrity_digest": "a7eb0f74c84f8895866e84650e3fd5ee8c2d9160ac770cdb31a0b2a86c5eb076"
       }
+    },
+    {
+      "name": "chunker_simple_v1",
+      "description": "Golden vector for chunker: payload_size=1000, block_count=2, symbol_size=256",
+      "inputs": {
+        "payload_size": 1000,
+        "block_count": 2,
+        "symbol_size": 256
+      },
+      "outputs": {
+        "block_count": 2,
+        "total_symbols": 4,
+        "blocks": [
+          {
+            "index": 0,
+            "start": 0,
+            "size": 500,
+            "symbol_count": 2,
+            "symbols": [
+              {
+                "index": 0,
+                "start": 0,
+                "size": 256,
+                "padded": false
+              },
+              {
+                "index": 1,
+                "start": 256,
+                "size": 244,
+                "padded": true
+              }
+            ]
+          },
+          {
+            "index": 1,
+            "start": 500,
+            "size": 500,
+            "symbol_count": 2,
+            "symbols": [
+              {
+                "index": 0,
+                "start": 0,
+                "size": 256,
+                "padded": false
+              },
+              {
+                "index": 1,
+                "start": 256,
+                "size": 244,
+                "padded": true
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "chunker_remainder_v1",
+      "description": "Golden vector for chunker: payload_size=1001, block_count=2, symbol_size=256",
+      "inputs": {
+        "payload_size": 1001,
+        "block_count": 2,
+        "symbol_size": 256
+      },
+      "outputs": {
+        "block_count": 2,
+        "total_symbols": 4,
+        "blocks": [
+          {
+            "index": 0,
+            "start": 0,
+            "size": 501,
+            "symbol_count": 2,
+            "symbols": [
+              {
+                "index": 0,
+                "start": 0,
+                "size": 256,
+                "padded": false
+              },
+              {
+                "index": 1,
+                "start": 256,
+                "size": 245,
+                "padded": true
+              }
+            ]
+          },
+          {
+            "index": 1,
+            "start": 501,
+            "size": 500,
+            "symbol_count": 2,
+            "symbols": [
+              {
+                "index": 0,
+                "start": 0,
+                "size": 256,
+                "padded": false
+              },
+              {
+                "index": 1,
+                "start": 256,
+                "size": 244,
+                "padded": true
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "chunker_padding_v1",
+      "description": "Golden vector for chunker: payload_size=1000, block_count=1, symbol_size=256",
+      "inputs": {
+        "payload_size": 1000,
+        "block_count": 1,
+        "symbol_size": 256
+      },
+      "outputs": {
+        "block_count": 1,
+        "total_symbols": 4,
+        "blocks": [
+          {
+            "index": 0,
+            "start": 0,
+            "size": 1000,
+            "symbol_count": 4,
+            "symbols": [
+              {
+                "index": 0,
+                "start": 0,
+                "size": 256,
+                "padded": false
+              },
+              {
+                "index": 1,
+                "start": 256,
+                "size": 256,
+                "padded": false
+              },
+              {
+                "index": 2,
+                "start": 512,
+                "size": 256,
+                "padded": false
+              },
+              {
+                "index": 3,
+                "start": 768,
+                "size": 232,
+                "padded": true
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "chunker_exact_multiple_v1",
+      "description": "Golden vector for chunker: payload_size=1024, block_count=2, symbol_size=256",
+      "inputs": {
+        "payload_size": 1024,
+        "block_count": 2,
+        "symbol_size": 256
+      },
+      "outputs": {
+        "block_count": 2,
+        "total_symbols": 4,
+        "blocks": [
+          {
+            "index": 0,
+            "start": 0,
+            "size": 512,
+            "symbol_count": 2,
+            "symbols": [
+              {
+                "index": 0,
+                "start": 0,
+                "size": 256,
+                "padded": false
+              },
+              {
+                "index": 1,
+                "start": 256,
+                "size": 256,
+                "padded": false
+              }
+            ]
+          },
+          {
+            "index": 1,
+            "start": 512,
+            "size": 512,
+            "symbol_count": 2,
+            "symbols": [
+              {
+                "index": 0,
+                "start": 0,
+                "size": 256,
+                "padded": false
+              },
+              {
+                "index": 1,
+                "start": 256,
+                "size": 256,
+                "padded": false
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "chunker_single_byte_v1",
+      "description": "Golden vector for chunker: payload_size=1, block_count=1, symbol_size=256",
+      "inputs": {
+        "payload_size": 1,
+        "block_count": 1,
+        "symbol_size": 256
+      },
+      "outputs": {
+        "block_count": 1,
+        "total_symbols": 1,
+        "blocks": [
+          {
+            "index": 0,
+            "start": 0,
+            "size": 1,
+            "symbol_count": 1,
+            "symbols": [
+              {
+                "index": 0,
+                "start": 0,
+                "size": 1,
+                "padded": true
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "chunker_empty_v1",
+      "description": "Golden vector for chunker: payload_size=0, block_count=1, symbol_size=256",
+      "inputs": {
+        "payload_size": 0,
+        "block_count": 1,
+        "symbol_size": 256
+      },
+      "outputs": {
+        "block_count": 1,
+        "total_symbols": 0,
+        "blocks": [
+          {
+            "index": 0,
+            "start": 0,
+            "size": 0,
+            "symbol_count": 0,
+            "symbols": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "chunker_symbol_size_one_v1",
+      "description": "Golden vector for chunker: payload_size=10, block_count=2, symbol_size=1",
+      "inputs": {
+        "payload_size": 10,
+        "block_count": 2,
+        "symbol_size": 1
+      },
+      "outputs": {
+        "block_count": 2,
+        "total_symbols": 10,
+        "blocks": [
+          {
+            "index": 0,
+            "start": 0,
+            "size": 5,
+            "symbol_count": 5,
+            "symbols": [
+              {
+                "index": 0,
+                "start": 0,
+                "size": 1,
+                "padded": false
+              },
+              {
+                "index": 1,
+                "start": 1,
+                "size": 1,
+                "padded": false
+              },
+              {
+                "index": 2,
+                "start": 2,
+                "size": 1,
+                "padded": false
+              },
+              {
+                "index": 3,
+                "start": 3,
+                "size": 1,
+                "padded": false
+              },
+              {
+                "index": 4,
+                "start": 4,
+                "size": 1,
+                "padded": false
+              }
+            ]
+          },
+          {
+            "index": 1,
+            "start": 5,
+            "size": 5,
+            "symbol_count": 5,
+            "symbols": [
+              {
+                "index": 0,
+                "start": 0,
+                "size": 1,
+                "padded": false
+              },
+              {
+                "index": 1,
+                "start": 1,
+                "size": 1,
+                "padded": false
+              },
+              {
+                "index": 2,
+                "start": 2,
+                "size": 1,
+                "padded": false
+              },
+              {
+                "index": 3,
+                "start": 3,
+                "size": 1,
+                "padded": false
+              },
+              {
+                "index": 4,
+                "start": 4,
+                "size": 1,
+                "padded": false
+              }
+            ]
+          }
+        ]
+      }
     }
   ]
 }
