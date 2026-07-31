@@ -134,4 +134,15 @@ mod tests {
         let data: Vec<u8> = (0..=255).collect();
         assert_eq!(result, crc32c_digest(&data));
     }
+
+    #[test]
+    fn test_crc32c_large_input_consistency() {
+        let data: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect();
+        let one_shot = crc32c_digest(&data);
+        let mut hasher = Crc32cHasher::new();
+        for chunk in data.chunks(997) {
+            hasher.update(chunk);
+        }
+        assert_eq!(hasher.finalize(), one_shot);
+    }
 }
