@@ -107,6 +107,7 @@ fn crc32c_append(state: u32, data: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn test_crc32c_known_answers() {
@@ -178,5 +179,20 @@ mod tests {
             hasher.update(chunk);
         }
         assert_eq!(hasher.finalize(), one_shot);
+    }
+
+    proptest! {
+        #[test]
+        fn prop_crc32c_streaming_arbitrary_chunks(
+            data in proptest::collection::vec(proptest::arbitrary::any::<u8>(), 0..1000usize),
+            chunk_size in 1usize..=100
+        ) {
+            let one_shot = crc32c_digest(&data);
+            let mut hasher = Crc32cHasher::new();
+            for chunk in data.chunks(chunk_size) {
+                hasher.update(chunk);
+            }
+            prop_assert_eq!(hasher.finalize(), one_shot);
+        }
     }
 }
