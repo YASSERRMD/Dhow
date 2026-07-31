@@ -136,6 +136,17 @@ mod tests {
     }
 
     #[test]
+    fn test_crc32c_streaming_empty_update() {
+        let data = b"test data for empty update";
+        let one_shot = crc32c_digest(data);
+        let mut hasher = Crc32cHasher::new();
+        hasher.update(&[]);
+        hasher.update(data);
+        hasher.update(&[]);
+        assert_eq!(hasher.finalize(), one_shot);
+    }
+
+    #[test]
     fn test_crc32c_large_input_consistency() {
         let data: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect();
         let one_shot = crc32c_digest(&data);
