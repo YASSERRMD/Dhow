@@ -113,11 +113,11 @@ mod tests {
     #[test]
     fn test_blake3_streaming_single_byte_incremental() {
         let mut hasher = Blake3Hasher::new();
-        for i in 0..256u8 {
+        for i in 0..=255u8 {
             hasher.update(&[i]);
         }
         let result = hasher.finalize();
-        let data: Vec<u8> = (0..256).collect();
+        let data: Vec<u8> = (0..=255).collect();
         assert_eq!(result, blake3_digest(&data));
     }
 }
