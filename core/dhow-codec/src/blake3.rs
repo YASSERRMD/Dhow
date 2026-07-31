@@ -55,3 +55,58 @@ impl Default for Blake3Hasher {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hex(s: &str) -> [u8; DIGEST_LEN] {
+        hex::decode(s).unwrap().try_into().unwrap()
+    }
+
+    #[test]
+    fn test_blake3_known_answers() {
+        assert_eq!(
+            blake3_digest(b""),
+            hex("af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262")
+        );
+        assert_eq!(
+            blake3_digest(b"123456789"),
+            hex("b7d65b48420d1033cb2595293263b6f72eabee20d55e699d0df1973b3c9deed1")
+        );
+        assert_eq!(
+            blake3_digest(b"Hello world!"),
+            hex("793c10bc0b28c378330d39edace7260af9da81d603b8ffede2706a21eda893f4")
+        );
+    }
+
+    #[test]
+    fn test_blake3_streaming_equals_one_shot() {
+        let data: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+
+        let one_shot = blake3_digest(&data);
+
+        let mut hasher = Blake3Hasher::new();
+        hasher.update(&data[..100]);
+        hasher.update(&data[100..500]);
+        hasher.update(&data[500..]);
+        let streaming = hasher.finalize();
+
+        assert_eq!(one_shot, streaming);
+    }
+
+    #[test]
+    fn test_blake3_streaming_empty() {
+        let hasher = Blake3Hasher::new();
+        let result = hasher.finalize();
+        assert_eq!(result, blake3_digest(b""));
+    }
+
+    #[test]
+    fn test_blake3_streaming_single_byte() {
+        let mut hasher = Blake3Hasher::new();
+        hasher.update(&[0x42]);
+        let result = hasher.finalize();
+        assert_eq!(result, blake3_digest(&[0x42]));
+    }
+}
