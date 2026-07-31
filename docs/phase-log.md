@@ -1,5 +1,48 @@
 # Phase Log
 
+## Phase 6 - Integrity primitives
+
+**Objective:** CRC32C and BLAKE3 wrappers with streaming interfaces; per-block
+and whole-payload digests per spec.
+
+**Gates:** known-answer tests against published vectors; streaming equals one-shot
+on random inputs.
+
+### Gate output
+
+#### Rust tests
+
+```
+$ cargo test --all-targets
+running 55 tests (dhow-codec)
+test result: ok. 55 passed; 0 failed; 0 ignored
+
+running 8 tests (dhow-crypt)
+test result: ok. 8 passed; 0 failed; 0 ignored
+
+running 0 tests (dhow-ffi)
+test result: ok. 0 passed; 0 failed; 0 ignored
+```
+
+#### Clippy
+```
+$ cargo clippy -D warnings
+    Finished `dev` profile [unoptimized + debuginfo]
+```
+
+#### Security audit
+```
+$ cargo audit
+error: 0 vulnerabilities found
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+21
+```
+
 ## Phase 5 - Chunker
 
 **Objective:** Deterministic payload chunking into source blocks and symbols per

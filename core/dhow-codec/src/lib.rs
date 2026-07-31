@@ -5,7 +5,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod blake3;
 pub mod chunker;
+pub mod crc32c;
+#[cfg(test)]
+mod integrity_test;
 
 use thiserror::Error;
 
