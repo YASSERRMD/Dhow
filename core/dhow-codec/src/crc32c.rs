@@ -70,11 +70,8 @@ mod tests {
     #[test]
     fn test_crc32c_known_answers() {
         assert_eq!(crc32c_digest(b""), 0);
-        assert_eq!(crc32c_digest(b"123456789"), 0xE8D5_94D9);
-        assert_eq!(
-            crc32c_digest(b"The quick brown fox jumps over the lazy dog"),
-            crc32c::crc32c(b"The quick brown fox jumps over the lazy dog")
-        );
+        assert_eq!(crc32c_digest(b"123456789"), 0xE306_9283);
+        assert_eq!(crc32c_digest(b"Hello world!"), 0x7B98_E751);
     }
 
     #[test]
