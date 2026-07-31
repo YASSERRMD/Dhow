@@ -5,6 +5,28 @@
 //!
 //! The polynomial used is Castagnoli (0x82F63B78 reflected), which provides
 //! better error detection than standard CRC32 for small messages.
+//!
+//! # Algorithm
+//!
+//! Uses a precomputed 256-entry lookup table for performance. The table is
+//! generated at compile time via a `const fn` that applies the standard
+//! bit-by-bit CRC32C algorithm to each byte value 0–255.
+//!
+//! # Parameters
+//!
+//! - Polynomial: 0x104C11DB7 (normal), 0x82F63B78 (reflected)
+//! - Initial value: 0xFFFFFFFF
+//! - Final XOR: 0xFFFFFFFF
+//! - Reflect input: true
+//! - Reflect output: true
+//!
+//! # Example
+//!
+//! ```
+//! use dhow_codec::crc32c::crc32c_digest;
+//! assert_eq!(crc32c_digest(b"123456789"), 0xE3069283);
+//! assert_eq!(crc32c_digest(b"Hello world!"), 0x7B98E751);
+//! ```
 
 const CRC32C_POLY: u32 = 0x82F63B78;
 
