@@ -6,8 +6,8 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::blake3::{blake3_digest, Blake3Hasher, DIGEST_LEN};
-    use crate::crc32c::{crc32c_digest, Crc32cHasher};
+    use crate::blake3::{Blake3Hasher, DIGEST_LEN, blake3_digest};
+    use crate::crc32c::{Crc32cHasher, crc32c_digest};
 
     #[test]
     fn test_crc32c_round_trip_deterministic() {
