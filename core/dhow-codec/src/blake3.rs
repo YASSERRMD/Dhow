@@ -150,4 +150,12 @@ mod tests {
         hasher.update(&[]);
         assert_eq!(hasher.finalize(), one_shot);
     }
+
+    #[test]
+    fn test_blake3_deterministic() {
+        let data = b"payload for determinism check";
+        let h1 = blake3_digest(data);
+        let h2 = blake3_digest(data);
+        assert_eq!(h1, h2);
+    }
 }
