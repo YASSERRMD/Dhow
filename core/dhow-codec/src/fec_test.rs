@@ -3,6 +3,7 @@
 #[cfg(test)]
 mod tests {
     use crate::fec;
+    use proptest::prelude::*;
 
     #[test]
     fn test_fec_round_trip_source_only() {
@@ -67,5 +68,20 @@ mod tests {
         let decoded = fec::decode(&packets, &config);
         assert!(decoded.is_some());
         assert_eq!(decoded.unwrap(), data);
+    }
+
+    proptest! {
+        #[test]
+        fn prop_fec_round_trip(
+            data in proptest::collection::vec(proptest::arbitrary::any::<u8>(), 1..10000usize)
+        ) {
+            let params = fec::FecParams::new();
+            let encoder = fec::encode(&data, &params);
+            let config = encoder.config();
+            let packets = encoder.packets(20);
+            let decoded = fec::decode(&packets, &config);
+            prop_assert!(decoded.is_some());
+            prop_assert_eq!(decoded.unwrap(), data);
+        }
     }
 }
