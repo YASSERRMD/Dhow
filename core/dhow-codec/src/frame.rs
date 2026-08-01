@@ -229,6 +229,7 @@ impl FrameHeader {
 
     pub fn magic(&self) -> [u8; 4] { self.magic }
     pub fn version(&self) -> u8 { self.version }
+    /// Returns the frame type.
     pub fn frame_type(&self) -> FrameType { self.frame_type }
     pub fn session_id(&self) -> [u8; 16] { self.session_id }
     pub fn truncated_mac(&self) -> [u8; 8] { self.truncated_mac }
@@ -236,6 +237,16 @@ impl FrameHeader {
     pub fn symbol_index(&self) -> u32 { self.symbol_index }
     pub fn payload_length(&self) -> u16 { self.payload_length }
     pub fn crc32c(&self) -> u32 { self.crc32c }
+
+    /// Returns the frame type as a raw u8.
+    pub fn frame_type_raw(&self) -> u8 {
+        self.frame_type as u8
+    }
+
+    /// Returns the reserved field value.
+    pub fn reserved(&self) -> u16 {
+        self.reserved
+    }
 }
 
 /// A complete frame: header + payload.
