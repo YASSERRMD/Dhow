@@ -1,5 +1,39 @@
 # Phase Log
 
+## Phase 8 - Frame wire format
+
+**Objective:** Binary frame header and payload wire format per `proto/frame.md`.
+Serialize/deserialize frame headers; compute truncated HMAC-BLAKE3 MAC and
+CRC32C checksum; validate magic, version, and integrity.
+
+**Gates:** round-trip identity (serialize -> deserialize recovers original);
+MAC verification with correct and wrong key; CRC32C mismatch detection;
+invalid magic and version rejection; proptest on arbitrary payloads.
+
+### Gate output
+
+#### Rust tests
+
+```
+$ cargo test -p dhow-codec --lib frame_test
+running 16 tests
+test result: ok. 16 passed; 0 failed; 0 ignored
+```
+
+#### Clippy
+
+```
+$ cargo clippy -p dhow-codec -D warnings
+    Finished `dev` profile
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+14
+```
+
 ## Phase 7 - FEC (RaptorQ)
 
 **Objective:** RaptorQ (RFC 6330) encoding and decoding wrappers for
