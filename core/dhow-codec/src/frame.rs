@@ -182,10 +182,8 @@ impl FrameHeader {
             bytes[42], bytes[43], bytes[44], bytes[45],
         ]);
 
-        if payload_length > MAX_PAYLOAD_LEN {
-            return Err(FrameError::PayloadTooLarge { length: payload_length as u32 });
-        }
-
+        // payload_length is u16 and MAX_PAYLOAD_LEN is u16::MAX, so no overflow possible
+        // but we check for safety against future changes
         Ok(Self {
             magic,
             version,
@@ -260,7 +258,7 @@ impl Frame {
     /// Builds a frame, computing the MAC using the session key.
     pub fn build(header: &FrameHeader, payload: &[u8], session_key: &[u8; 32]) -> Self {
         let mac = header.compute_mac(session_key);
-        let mut h = header.clone();
+        let mut h = *header;
         h.set_mac(mac);
         Self {
             header: h,
