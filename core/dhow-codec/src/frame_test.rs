@@ -221,6 +221,19 @@ fn test_frame_large_payload() {
 }
 
 #[test]
+fn test_frame_max_payload() {
+    let session_id = [0; 16];
+    let key = test_key();
+    let payload: Vec<u8> = (0..FRAME_HEADER_SIZE).map(|i| (i % 256) as u8).collect();
+    let header = FrameHeader::new(FrameType::Repair, session_id, 0, 1, &payload);
+    let frame = Frame::build(&header, &payload, &key);
+    let bytes = frame.to_vec();
+
+    let parsed = Frame::from_bytes(&bytes, &key).unwrap();
+    assert_eq!(parsed.header().payload_length() as usize, payload.len());
+}
+
+#[test]
 fn test_frame_mac_with_zero_key() {
     let session_id = [0; 16];
     let key = [0u8; 32];
