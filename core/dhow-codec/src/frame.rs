@@ -4,22 +4,30 @@
 //! Each QR frame consists of a 46-byte fixed header followed by a variable-length
 //! payload.
 //!
-//! # Layout
+//! ## Header Fields
 //!
-//! ```text
-//!  Offset  Size  Field
-//!  0       4     Magic ("DHOW")
-//!  4       1     Version (0x01)
-//!  5       1     Frame Type (0=Session, 1=Repair, 2=Manifest)
-//!  6       2     Reserved (0x0000)
-//!  8       16    Session ID
-//!  24      8     Truncated MAC (first 8 bytes of HMAC-BLAKE3)
-//!  32      4     Block Index (u32 LE)
-//!  36      4     Symbol Index (u32 LE)
-//!  40      2     Payload Length (u16 LE, max 65535)
-//!  42      4     CRC32C (u32 LE)
-//!  46      var   Payload
-//! ```
+//! | Offset | Size | Field |
+//! |--------|------|-------|
+//! | 0 | 4 | Magic ("DHOW") |
+//! | 4 | 1 | Version (0x01) |
+//! | 5 | 1 | Frame Type |
+//! | 6 | 2 | Reserved |
+//! | 8 | 16 | Session ID |
+//! | 24 | 8 | Truncated MAC |
+//! | 32 | 4 | Block Index |
+//! | 36 | 4 | Symbol Index |
+//! | 40 | 2 | Payload Length |
+//! | 42 | 4 | CRC32C |
+//! | 46 | var | Payload |
+//!
+//! ## Integrity
+//!
+//! Two integrity mechanisms protect each frame:
+//!
+//! - **MAC**: HMAC-BLAKE3(session_key, header_fields) truncated to 8 bytes.
+//!   Verifies authenticity and binding to the session.
+//! - **CRC32C**: CRC32C of the payload, covering detection of corruption
+//!   in the payload field itself.
 //!
 //! # Example
 //!
