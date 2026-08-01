@@ -110,6 +110,19 @@ fn test_frame_header_from_bytes_round_trip() {
 }
 
 #[test]
+fn test_frame_header_reserved_nonzero() {
+    let mut bytes = vec![0u8; FRAME_HEADER_SIZE];
+    bytes[0..4].copy_from_slice(&MAGIC);
+    bytes[4] = VERSION;
+    // Set reserved field to nonzero
+    bytes[6] = 0xFF;
+    bytes[7] = 0xFF;
+    let result = FrameHeader::from_bytes(&bytes);
+    // Currently we only check magic/version; reserved is lenient
+    assert!(result.is_err()); // reserved != 0 should fail
+}
+
+#[test]
 fn test_frame_header_invalid_magic() {
     let mut bytes = vec![0u8; FRAME_HEADER_SIZE];
     bytes[0..4].copy_from_slice(b"XXXX");

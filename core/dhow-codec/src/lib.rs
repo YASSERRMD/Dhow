@@ -92,6 +92,10 @@ pub enum FrameError {
     /// The frame header is too short.
     #[error("frame header too short: {length} bytes (minimum 46)")]
     HeaderTooShort { length: usize },
+
+    /// The reserved field is non-zero.
+    #[error("reserved field must be zero, got {value}")]
+    ReservedFieldNonZero { value: u16 },
 }
 
 /// Errors that can occur during session operations.

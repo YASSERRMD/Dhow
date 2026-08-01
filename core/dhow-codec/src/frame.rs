@@ -166,7 +166,7 @@ impl FrameHeader {
 
         let reserved = u16::from_le_bytes([bytes[6], bytes[7]]);
         if reserved != 0 {
-            return Err(FrameError::InvalidMagic { got: [0, 0, 0, 0] });
+            return Err(FrameError::ReservedFieldNonZero { value: reserved });
         }
 
         let session_id: [u8; 16] = bytes[8..24].try_into().unwrap();
