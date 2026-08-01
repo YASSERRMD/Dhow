@@ -27,7 +27,10 @@ impl FecParams {
     }
 
     /// Creates FEC parameters with a custom MTU.
+    ///
+    /// The MTU must be at least 64 bytes.
     pub fn with_mtu(mtu: u16) -> Self {
+        assert!(mtu >= 64, "MTU must be at least 64");
         Self { mtu }
     }
 
