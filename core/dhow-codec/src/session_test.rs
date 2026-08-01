@@ -126,6 +126,26 @@ fn test_session_header_reserved2_nonzero() {
 }
 
 #[test]
+fn test_session_params_validation_valid() {
+    let params = test_params();
+    assert!(params.validate().is_ok());
+}
+
+#[test]
+fn test_session_params_validation_zero_blocks() {
+    let mut params = test_params();
+    params.block_count = 0;
+    assert!(params.validate().is_err());
+}
+
+#[test]
+fn test_session_params_validation_zero_symbol_size() {
+    let mut params = test_params();
+    params.symbol_size = 0;
+    assert!(params.validate().is_err());
+}
+
+#[test]
 fn test_raptorq_params_equality() {
     let p1 = RaptorQParams { z: 1, n: 2, psi: 3 };
     let p2 = RaptorQParams { z: 1, n: 2, psi: 3 };
