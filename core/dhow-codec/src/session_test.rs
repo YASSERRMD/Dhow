@@ -114,6 +114,18 @@ fn test_session_header_reserved_nonzero() {
 }
 
 #[test]
+fn test_session_header_reserved2_nonzero() {
+    let session_id = [0u8; 16];
+    let params = test_params();
+    let header = SessionHeader::new(session_id, params);
+    let mut bytes = header.to_vec();
+    // Set reserved2 to non-zero (offset 90..122)
+    bytes[95] = 0xFF;
+    let result = SessionHeader::from_bytes(&bytes);
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_raptorq_params_equality() {
     let p1 = RaptorQParams { z: 1, n: 2, psi: 3 };
     let p2 = RaptorQParams { z: 1, n: 2, psi: 3 };
