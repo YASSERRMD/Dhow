@@ -145,14 +145,23 @@ fn test_session_params_validation_zero_symbol_size() {
     assert!(params.validate().is_err());
 }
 
-#[test]
-fn test_raptorq_params_equality() {
-    let p1 = RaptorQParams { z: 1, n: 2, psi: 3 };
-    let p2 = RaptorQParams { z: 1, n: 2, psi: 3 };
-    let p3 = RaptorQParams { z: 1, n: 2, psi: 4 };
-    assert_eq!(p1, p2);
-    assert_ne!(p1, p3);
-}
+    #[test]
+    fn test_raptorq_params_equality() {
+        let p1 = RaptorQParams { z: 1, n: 2, psi: 3 };
+        let p2 = RaptorQParams { z: 1, n: 2, psi: 3 };
+        let p3 = RaptorQParams { z: 1, n: 2, psi: 4 };
+        assert_eq!(p1, p2);
+        assert_ne!(p1, p3);
+    }
+
+    #[test]
+    fn test_session_params_equality() {
+        let p1 = test_params();
+        let mut p2 = test_params();
+        assert_eq!(p1, p2);
+        p2.block_count = 99;
+        assert_ne!(p1, p2);
+    }
 
 #[test]
 fn test_session_params_accessors() {
