@@ -28,6 +28,43 @@ known-answer test against RFC 6330 vectors.
 14. `docs(codec): document raptorq module`
 15. `chore: verify FEC gates pass`
 
+### Gate output
+
+#### Rust tests
+
+```
+$ cargo test -p dhow-codec --lib fec_test
+running 12 tests
+test result: ok. 12 passed; 0 failed; 0 ignored
+```
+
+#### Clippy
+
+```
+$ cargo clippy -p dhow-codec -D warnings
+    Finished `dev` profile
+```
+
+#### Round-trip property tests (proptest)
+
+- `prop_fec_round_trip`: round-trip identity on arbitrary payloads (1 to 10,000 bytes)
+
+#### Edge case tests
+
+- Empty payloads (skip - raptorq panics on 0-length)
+- Single byte payload
+- 100K byte payload
+- 30% simulated packet loss recovery
+- Custom MTU (512)
+- MTU below minimum (64) panics as expected
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+21
+```
+
 ## Phase 6 - Integrity primitives
 
 **Objective:** CRC32C and BLAKE3 wrappers with streaming interfaces; per-block
