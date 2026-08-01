@@ -141,6 +141,26 @@ pub enum ResumeError {
     InvalidSymbolCount { count: u32 },
 }
 
+/// Errors that can occur during FEC encoding or decoding.
+#[derive(Debug, Error)]
+pub enum FecError {
+    /// The input data is too large for RaptorQ encoding.
+    #[error("payload too large for FEC encoding")]
+    PayloadTooLarge,
+
+    /// The source block size is invalid.
+    #[error("invalid source block size: {details}")]
+    InvalidSourceBlock { details: String },
+
+    /// Decoding failed (insufficient packets received).
+    #[error("decoding failed: insufficient packets")]
+    InsufficientPackets,
+
+    /// The MTU is too small.
+    #[error("MTU {mtu} is below minimum {min}")]
+    MtuTooSmall { mtu: u16, min: u16 },
+}
+
 /// Top-level error type for the codec crate.
 #[derive(Debug, Error)]
 pub enum CodecError {
@@ -163,6 +183,10 @@ pub enum CodecError {
     /// RaptorQ encoding/decoding error.
     #[error("raptorq error: {details}")]
     RaptorQ { details: String },
+
+    /// RaptorQ encoding/decoding error.
+    #[error("FEC error: {0}")]
+    Fec(#[from] FecError),
 
     /// An unexpected internal error.
     #[error("internal error: {details}")]
