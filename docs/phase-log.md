@@ -1,5 +1,33 @@
 # Phase Log
 
+## Phase 7 - FEC (RaptorQ)
+
+**Objective:** RaptorQ (RFC 6330) encoding and decoding wrappers for
+fault-tolerant payload transmission. Generate source and repair symbols;
+decode from any sufficient subset.
+
+**Gates:** round-trip identity (encode -> decode recovers original);
+decode from source packets only; decode from repair packets only;
+known-answer test against RFC 6330 vectors.
+
+### Planned atomic commits
+
+1. `docs: add phase-log.md with Phase 7 objective`
+2. `chore: add raptorq dependency`
+3. `feat(codec): add raptorq module skeleton`
+4. `feat(codec): add FecParams struct`
+5. `feat(codec): add encode function`
+6. `feat(codec): add repair packet generation`
+7. `feat(codec): add decode function`
+8. `feat(codec): add FecError error variant`
+9. `test(codec): add encode-decode round-trip test`
+10. `test(codec): add source-only decode test`
+11. `test(codec): add repair-only decode test`
+12. `test(codec): add known-answer test against RFC 6330`
+13. `test(codec): add proptest for round-trip property`
+14. `docs(codec): document raptorq module`
+15. `chore: verify FEC gates pass`
+
 ## Phase 6 - Integrity primitives
 
 **Objective:** CRC32C and BLAKE3 wrappers with streaming interfaces; per-block
