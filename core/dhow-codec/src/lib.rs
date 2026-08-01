@@ -223,6 +223,12 @@ mod tests {
     }
 
     #[test]
+    fn test_frame_error_reserved_nonzero() {
+        let err = FrameError::ReservedFieldNonZero { value: 1 };
+        assert!(err.to_string().contains("must be zero"));
+    }
+
+    #[test]
     fn test_session_error_display() {
         let err = SessionError::NotInitialized;
         assert!(err.to_string().contains("not initialized"));
