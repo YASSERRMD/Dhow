@@ -182,6 +182,10 @@ impl FrameHeader {
             bytes[42], bytes[43], bytes[44], bytes[45],
         ]);
 
+        if payload_length > MAX_PAYLOAD_LEN {
+            return Err(FrameError::PayloadTooLarge { length: payload_length as u32 });
+        }
+
         Ok(Self {
             magic,
             version,
