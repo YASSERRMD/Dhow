@@ -42,4 +42,30 @@ mod tests {
         assert!(decoded.is_some());
         assert_eq!(decoded.unwrap(), data);
     }
+
+    #[test]
+    fn test_fec_single_byte() {
+        let data: Vec<u8> = vec![42];
+        let params = fec::FecParams::new();
+        let encoder = fec::encode(&data, &params);
+        let config = encoder.config();
+        let packets = encoder.packets(10);
+
+        let decoded = fec::decode(&packets, &config);
+        assert!(decoded.is_some());
+        assert_eq!(decoded.unwrap(), data);
+    }
+
+    #[test]
+    fn test_fec_large_payload() {
+        let data: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect();
+        let params = fec::FecParams::new();
+        let encoder = fec::encode(&data, &params);
+        let config = encoder.config();
+        let packets = encoder.packets(50);
+
+        let decoded = fec::decode(&packets, &config);
+        assert!(decoded.is_some());
+        assert_eq!(decoded.unwrap(), data);
+    }
 }
