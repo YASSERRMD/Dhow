@@ -245,6 +245,15 @@ mod tests {
     }
 
     #[test]
+    fn test_codec_error_frame_payload_too_large() {
+        let codec_err = CodecError::FramePayloadTooLarge {
+            length: 70000,
+            max: 65535,
+        };
+        assert!(codec_err.to_string().contains("too large"));
+    }
+
+    #[test]
     fn test_codec_error_from_session() {
         let session_err = SessionError::InvalidSessionId;
         let codec_err = CodecError::from(session_err);
