@@ -97,6 +97,34 @@ pub struct SessionParams {
     pub payload_digest: [u8; 32],
 }
 
+impl SessionParams {
+    /// Validates that the session parameters are internally consistent.
+    ///
+    /// Returns an error if:
+    /// - `block_count` is zero
+    /// - `symbol_size` is zero
+    /// - `total_symbols_per_block < source_symbols_per_block`
+    pub fn validate(&self) -> Result<(), SessionError> {
+        if self.block_count == 0 {
+            return Err(SessionError::InvalidParameters {
+                details: "block_count must be non-zero".to_string(),
+            });
+        }
+        if self.symbol_size == 0 {
+            return Err(SessionError::InvalidParameters {
+                details: "symbol_size must be non-zero".to_string(),
+            });
+        }
+        if self.total_symbols_per_block < self.source_symbols_per_block {
+            return Err(SessionError::InvalidParameters {
+                details: "total_symbols_per_block must be >= source_symbols_per_block"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Parsed session header (126 bytes).
 #[derive(Debug, Clone)]
 pub struct SessionHeader {
