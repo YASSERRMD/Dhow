@@ -44,8 +44,8 @@
 //! assert_eq!(parsed.payload(), b"hello");
 //! ```
 
+use crate::FrameError;
 use crate::crc32c::crc32c_digest;
-use crate::{FrameError};
 use byteorder::{LittleEndian, WriteBytesExt};
 
 /// Magic bytes for Dhow frames (ASCII "DHOW").
@@ -112,7 +112,10 @@ impl FrameHeader {
         symbol_index: u32,
         payload: &[u8],
     ) -> Self {
-        assert!(payload.len() <= MAX_PAYLOAD_LEN as usize, "payload too large");
+        assert!(
+            payload.len() <= MAX_PAYLOAD_LEN as usize,
+            "payload too large"
+        );
         let crc32c = crc32c_digest(payload);
         Self {
             magic: MAGIC,
@@ -149,7 +152,9 @@ impl FrameHeader {
     /// Deserializes a header from a byte slice.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, FrameError> {
         if bytes.len() < FRAME_HEADER_SIZE {
-            return Err(FrameError::HeaderTooShort { length: bytes.len() });
+            return Err(FrameError::HeaderTooShort {
+                length: bytes.len(),
+            });
         }
 
         let magic: [u8; 4] = bytes[0..4].try_into().unwrap();
@@ -171,16 +176,10 @@ impl FrameHeader {
 
         let session_id: [u8; 16] = bytes[8..24].try_into().unwrap();
         let truncated_mac: [u8; 8] = bytes[24..32].try_into().unwrap();
-        let block_index = u32::from_le_bytes([
-            bytes[32], bytes[33], bytes[34], bytes[35],
-        ]);
-        let symbol_index = u32::from_le_bytes([
-            bytes[36], bytes[37], bytes[38], bytes[39],
-        ]);
+        let block_index = u32::from_le_bytes([bytes[32], bytes[33], bytes[34], bytes[35]]);
+        let symbol_index = u32::from_le_bytes([bytes[36], bytes[37], bytes[38], bytes[39]]);
         let payload_length = u16::from_le_bytes([bytes[40], bytes[41]]);
-        let crc32c = u32::from_le_bytes([
-            bytes[42], bytes[43], bytes[44], bytes[45],
-        ]);
+        let crc32c = u32::from_le_bytes([bytes[42], bytes[43], bytes[44], bytes[45]]);
 
         // payload_length is u16 and MAX_PAYLOAD_LEN is u16::MAX, so no overflow possible
         // but we check for safety against future changes
@@ -225,16 +224,34 @@ impl FrameHeader {
         mac
     }
 
-    pub fn magic(&self) -> [u8; 4] { self.magic }
-    pub fn version(&self) -> u8 { self.version }
+    pub fn magic(&self) -> [u8; 4] {
+        self.magic
+    }
+    pub fn version(&self) -> u8 {
+        self.version
+    }
     /// Returns the frame type.
-    pub fn frame_type(&self) -> FrameType { self.frame_type }
-    pub fn session_id(&self) -> [u8; 16] { self.session_id }
-    pub fn truncated_mac(&self) -> [u8; 8] { self.truncated_mac }
-    pub fn block_index(&self) -> u32 { self.block_index }
-    pub fn symbol_index(&self) -> u32 { self.symbol_index }
-    pub fn payload_length(&self) -> u16 { self.payload_length }
-    pub fn crc32c(&self) -> u32 { self.crc32c }
+    pub fn frame_type(&self) -> FrameType {
+        self.frame_type
+    }
+    pub fn session_id(&self) -> [u8; 16] {
+        self.session_id
+    }
+    pub fn truncated_mac(&self) -> [u8; 8] {
+        self.truncated_mac
+    }
+    pub fn block_index(&self) -> u32 {
+        self.block_index
+    }
+    pub fn symbol_index(&self) -> u32 {
+        self.symbol_index
+    }
+    pub fn payload_length(&self) -> u16 {
+        self.payload_length
+    }
+    pub fn crc32c(&self) -> u32 {
+        self.crc32c
+    }
 
     /// Returns the frame type as a raw u8.
     pub fn frame_type_raw(&self) -> u8 {
@@ -291,7 +308,8 @@ impl Frame {
             });
         }
 
-        let payload = bytes[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + header.payload_length() as usize].to_vec();
+        let payload =
+            bytes[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + header.payload_length() as usize].to_vec();
 
         // Verify CRC32C
         let actual_crc = crc32c_digest(&payload);
@@ -305,6 +323,10 @@ impl Frame {
         Ok(Self { header, payload })
     }
 
-    pub fn header(&self) -> &FrameHeader { &self.header }
-    pub fn payload(&self) -> &[u8] { &self.payload }
+    pub fn header(&self) -> &FrameHeader {
+        &self.header
+    }
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
 }

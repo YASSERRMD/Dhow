@@ -9,9 +9,9 @@ pub mod blake3;
 pub mod chunker;
 pub mod crc32c;
 pub mod fec;
-pub mod frame;
 #[cfg(test)]
 mod fec_test;
+pub mod frame;
 #[cfg(test)]
 mod frame_test;
 #[cfg(test)]
@@ -230,7 +230,10 @@ mod tests {
 
     #[test]
     fn test_frame_error_crc_mismatch() {
-        let err = FrameError::CrcMismatch { expected: 1, actual: 2 };
+        let err = FrameError::CrcMismatch {
+            expected: 1,
+            actual: 2,
+        };
         assert!(err.to_string().contains("CRC32C mismatch"));
     }
 

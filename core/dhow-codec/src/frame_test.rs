@@ -1,6 +1,6 @@
 //! Tests for the frame wire format module.
 
-use crate::frame::{Frame, FrameHeader, FrameType, FRAME_HEADER_SIZE, MAGIC, VERSION};
+use crate::frame::{FRAME_HEADER_SIZE, Frame, FrameHeader, FrameType, MAGIC, VERSION};
 use proptest::prelude::*;
 
 fn test_key() -> [u8; 32] {
