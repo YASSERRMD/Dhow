@@ -229,6 +229,18 @@ mod tests {
     }
 
     #[test]
+    fn test_frame_error_crc_mismatch() {
+        let err = FrameError::CrcMismatch { expected: 1, actual: 2 };
+        assert!(err.to_string().contains("CRC32C mismatch"));
+    }
+
+    #[test]
+    fn test_frame_error_mac_verification() {
+        let err = FrameError::MacVerificationFailed;
+        assert!(err.to_string().contains("MAC verification"));
+    }
+
+    #[test]
     fn test_session_error_display() {
         let err = SessionError::NotInitialized;
         assert!(err.to_string().contains("not initialized"));
