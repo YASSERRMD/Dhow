@@ -68,6 +68,9 @@ impl EncoderWrapper {
     }
 
     /// Returns source and repair packets.
+    ///
+    /// The number of repair packets per block is specified by
+    /// `repair_packets_per_block`.
     pub fn packets(&self, repair_packets_per_block: u32) -> Vec<raptorq::EncodingPacket> {
         self.inner.get_encoded_packets(repair_packets_per_block)
     }
@@ -80,6 +83,14 @@ impl EncoderWrapper {
     /// Returns only repair packets.
     pub fn repair_packets(&self, count: u32) -> Vec<raptorq::EncodingPacket> {
         self.inner.get_encoded_packets(count)
+    }
+
+    /// Convenience: generate enough repair packets to recover from
+    /// up to `loss_rate` fraction of packet loss.
+    pub fn repair_packets_for_loss_rate(&self, loss_rate: f64) -> Vec<raptorq::EncodingPacket> {
+        let source_count = self.source_packets().len() as f64;
+        let repair_count = (source_count * loss_rate).ceil() as u32;
+        self.repair_packets(repair_count)
     }
 }
 
