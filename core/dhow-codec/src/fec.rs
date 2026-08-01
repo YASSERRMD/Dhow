@@ -5,6 +5,21 @@
 //!
 //! This is the core FEC primitive that allows Dhow to recover from
 //! packet loss during transmission.
+//!
+//! # Example
+//!
+//! ```
+//! use dhow_codec::fec::{FecParams, encode, decode};
+//!
+//! let data = b"Hello, Dhow!".to_vec();
+//! let params = FecParams::new();
+//! let encoder = encode(&data, &params);
+//! let config = encoder.config();
+//! let packets = encoder.packets(10);
+//!
+//! let decoded = decode(&packets, &config);
+//! assert_eq!(decoded.unwrap(), data);
+//! ```
 
 use raptorq::{Decoder, Encoder};
 
