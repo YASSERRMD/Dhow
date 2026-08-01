@@ -6,6 +6,26 @@ mod tests {
     use proptest::prelude::*;
 
     #[test]
+    fn test_fec_custom_mtu() {
+        let data: Vec<u8> = (0..500).map(|i| (i % 256) as u8).collect();
+        let params = fec::FecParams::with_mtu(512);
+        assert_eq!(params.mtu(), 512);
+        let encoder = fec::encode(&data, &params);
+        let config = encoder.config();
+        let packets = encoder.packets(20);
+
+        let decoded = fec::decode(&packets, &config);
+        assert!(decoded.is_some());
+        assert_eq!(decoded.unwrap(), data);
+    }
+
+    #[test]
+    #[should_panic(expected = "MTU must be at least 64")]
+    fn test_fec_mtu_too_small() {
+        let _ = fec::FecParams::with_mtu(32);
+    }
+
+    #[test]
     fn test_fec_round_trip_source_only() {
         let data: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
         let params = fec::FecParams::new();
