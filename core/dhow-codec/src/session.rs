@@ -4,27 +4,55 @@
 //! The session header is carried in a frame of type 0 (Session) and contains
 //! all parameters needed by the receiver to decode the transfer.
 //!
-//! ## Layout
+//! ## Header Layout
 //!
-//! | Offset | Size | Field |
-//! |--------|------|-------|
-//! | 0 | 4 | Magic ("DSES") |
-//! | 4 | 1 | Version (0x01) |
-//! | 5 | 3 | Reserved |
-//! | 8 | 16 | Session ID |
-//! | 24 | 8 | Payload Size |
-//! | 32 | 4 | Block Count |
-//! | 36 | 4 | Symbol Size |
-//! | 40 | 4 | Source Symbols Per Block (K) |
-//! | 44 | 4 | Total Symbols Per Block |
-//! | 48 | 4 | RaptorQ Z |
-//! | 52 | 4 | RaptorQ N |
-//! | 56 | 2 | RaptorQ PSI |
-//! | 58 | 32 | Payload Digest |
-//! | 90 | 32 | Reserved |
-//! | 122 | 4 | CRC32C |
+//! ```text
+//!  Offset  Size  Field
+//!  0       4     Magic ("DSES")
+//!  4       1     Version (0x01)
+//!  5       3     Reserved
+//!  8       16    Session ID
+//!  24      8     Payload Size
+//!  32      4     Block Count
+//!  36      4     Symbol Size
+//!  40      4     Source Symbols Per Block (K)
+//!  44      4     Total Symbols Per Block
+//!  48      4     RaptorQ Z
+//!  52      4     RaptorQ N
+//!  56      2     RaptorQ PSI
+//!  58      32    Payload Digest
+//!  90      32    Reserved
+//!  122     4     CRC32C
+//! ```
 //!
 //! Fixed header: 126 bytes.
+//!
+//! ## Integrity
+//!
+//! The CRC32C covers bytes 4..122 (version through reserved field 2),
+//! excluding the trailing CRC32C field itself. The payload digest is a
+//! BLAKE3 hash of the complete encrypted payload, recorded by the sender
+//! and verified by the receiver after reassembly.
+//!
+//! # Example
+//!
+//! ```
+//! use dhow_codec::session::{SessionHeader, SessionParams, RaptorQParams};
+//!
+//! let params = SessionParams {
+//!     payload_size: 1000,
+//!     block_count: 2,
+//!     symbol_size: 256,
+//!     source_symbols_per_block: 2,
+//!     total_symbols_per_block: 3,
+//!     raptorq: RaptorQParams { z: 2, n: 1, psi: 1 },
+//!     payload_digest: [0; 32],
+//! };
+//! let header = SessionHeader::new([0u8; 16], params);
+//! let bytes = header.to_vec();
+//! let parsed = SessionHeader::from_bytes(&bytes).unwrap();
+//! assert_eq!(parsed.params(), header.params());
+//! ```
 
 use crate::blake3::blake3_digest;
 use crate::crc32c::crc32c_digest;
