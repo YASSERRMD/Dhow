@@ -264,6 +264,17 @@ impl SessionHeader {
 }
 
 /// Verifies that the payload digest matches the given data.
+///
+/// # Example
+///
+/// ```
+/// use dhow_codec::session::verify_payload_digest;
+/// use dhow_codec::blake3::blake3_digest;
+///
+/// let data = b"test data";
+/// let digest = blake3_digest(data);
+/// assert!(verify_payload_digest(data, &digest));
+/// ```
 pub fn verify_payload_digest(data: &[u8], expected: &[u8; 32]) -> bool {
     let actual = blake3_digest(data);
     actual == *expected
