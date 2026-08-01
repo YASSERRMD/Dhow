@@ -21,7 +21,7 @@
 //! assert_eq!(decoded.unwrap(), data);
 //! ```
 
-use raptorq::{Decoder, Encoder};
+use raptorq::{Decoder, Encoder, EncodingPacket, ObjectTransmissionInformation};
 
 /// Default maximum packet size for FEC encoding.
 pub const DEFAULT_MTU: u16 = 1024;
@@ -96,21 +96,47 @@ impl EncoderWrapper {
     }
 
     /// Returns only repair packets.
-    pub fn repair_packets(&self, count: u32) -> Vec<raptorq::EncodingPacket> {
+    pub fn repair_packets(&self, count: u32) -> Vec<EncodingPacket> {
         self.inner.get_encoded_packets(count)
     }
 
     /// Convenience: generate enough repair packets to recover from
     /// up to `loss_rate` fraction of packet loss.
-    pub fn repair_packets_for_loss_rate(&self, loss_rate: f64) -> Vec<raptorq::EncodingPacket> {
+    pub fn repair_packets_for_loss_rate(&self, loss_rate: f64) -> Vec<EncodingPacket> {
         let source_count = self.source_packets().len() as f64;
         let repair_count = (source_count * loss_rate).ceil() as u32;
         self.repair_packets(repair_count)
     }
 }
 
+/// Stateful wrapper around the raptorq Decoder.
+pub struct FecDecoder {
+    inner: Decoder,
+}
+
+impl FecDecoder {
+    /// Creates a new decoder from an object transmission information config.
+    pub fn new(config: &ObjectTransmissionInformation) -> Self {
+        Self {
+            inner: Decoder::new(*config),
+        }
+    }
+
+    /// Feeds a received packet into the decoder.
+    pub fn add_packet(&mut self, packet: &EncodingPacket) {
+        self.inner.add_new_packet(packet.clone());
+    }
+
+    /// Attempts to reconstruct the original payload.
+    /// Returns `Some(data)` if enough packets have been received,
+    /// or `None` if more packets are needed.
+    pub fn decode(&mut self) -> Option<Vec<u8>> {
+        self.inner.get_result()
+    }
+}
+
 /// Decodes packets back into the original payload.
-pub fn decode(packets: &[raptorq::EncodingPacket], config: &raptorq::ObjectTransmissionInformation) -> Option<Vec<u8>> {
+pub fn decode(packets: &[EncodingPacket], config: &ObjectTransmissionInformation) -> Option<Vec<u8>> {
     let mut decoder = Decoder::new(*config);
     for packet in packets {
         decoder.add_new_packet(packet.clone());
