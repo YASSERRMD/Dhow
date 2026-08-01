@@ -158,6 +158,18 @@ fn test_frame_large_payload() {
     assert_eq!(parsed.payload(), &payload[..]);
 }
 
+#[test]
+fn test_frame_mac_with_zero_key() {
+    let session_id = [0; 16];
+    let key = [0u8; 32];
+    let header = FrameHeader::new(FrameType::Session, session_id, 0, 0, b"zero key");
+    let frame = Frame::build(&header, b"zero key", &key);
+    let bytes = frame.to_vec();
+
+    let parsed = Frame::from_bytes(&bytes, &key).unwrap();
+    assert_eq!(parsed.payload(), b"zero key");
+}
+
 proptest! {
     #[test]
     fn prop_frame_round_trip(
