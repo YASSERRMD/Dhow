@@ -173,4 +173,16 @@ mod tests {
             prop_assert_eq!(decoded.unwrap(), data);
         }
     }
+
+    #[test]
+    fn test_fec_error_display() {
+        let err = crate::FecError::MtuTooSmall { mtu: 32, min: 64 };
+        assert!(err.to_string().contains("below minimum"));
+    }
+
+    #[test]
+    fn test_fec_error_payload_too_large() {
+        let err = crate::FecError::PayloadTooLarge;
+        assert!(err.to_string().contains("too large"));
+    }
 }

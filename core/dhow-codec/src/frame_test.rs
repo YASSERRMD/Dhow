@@ -8,6 +8,15 @@ fn test_key() -> [u8; 32] {
 }
 
 #[test]
+fn test_frame_mac_deterministic() {
+    let session_id = [0x55; 16];
+    let key = [0xAB; 32];
+    let header1 = FrameHeader::new(FrameType::Repair, session_id, 0, 1, b"test");
+    let header2 = FrameHeader::new(FrameType::Repair, session_id, 0, 1, b"test");
+    assert_eq!(header1.compute_mac(&key), header2.compute_mac(&key));
+}
+
+#[test]
 fn test_frame_payload_truncated() {
     let session_id = [0; 16];
     let key = test_key();
