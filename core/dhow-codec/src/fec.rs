@@ -72,13 +72,14 @@ pub fn encode(data: &[u8], params: &FecParams) -> EncoderWrapper {
 
 /// Wrapper around the raptorq Encoder.
 pub struct EncoderWrapper {
-    inner: Encoder,
+    #[allow(dead_code)]
     params: FecParams,
+    inner: Encoder,
 }
 
 impl EncoderWrapper {
     /// Returns the encoding configuration.
-    pub fn config(&self) -> raptorq::ObjectTransmissionInformation {
+    pub fn config(&self) -> ObjectTransmissionInformation {
         self.inner.get_config()
     }
 
