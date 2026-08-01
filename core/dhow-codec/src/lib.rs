@@ -177,6 +177,10 @@ pub enum CodecError {
     #[error("frame error: {0}")]
     Frame(#[from] FrameError),
 
+    /// Frame payload exceeds maximum size.
+    #[error("frame payload too large: {length} bytes (max {max}")]
+    FramePayloadTooLarge { length: usize, max: usize },
+
     /// Session error.
     #[error("session error: {0}")]
     Session(#[from] SessionError),
