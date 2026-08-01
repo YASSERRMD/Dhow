@@ -4,6 +4,7 @@ use crate::session::{
     SessionHeader, SessionParams, RaptorQParams, SESSION_HEADER_SIZE, SESSION_MAGIC,
     SESSION_VERSION, verify_payload_digest,
 };
+use proptest::prelude::*;
 
 fn test_params() -> SessionParams {
     SessionParams {
@@ -135,4 +136,34 @@ fn test_session_params_accessors() {
     assert_eq!(p.raptorq.n, 1);
     assert_eq!(p.raptorq.psi, 1);
     assert_eq!(p.payload_digest, [0xAB; 32]);
+}
+
+proptest! {
+    #[test]
+    fn prop_session_header_round_trip(
+        session_id in proptest::array::uniform16(proptest::arbitrary::any::<u8>()),
+        payload_size in 1u64..1000000,
+        block_count in 1u32..100,
+        symbol_size in 1u32..4096,
+        source_k in 1u32..100,
+        total_k in 1u32..200,
+        z in 1u32..50,
+        n in 1u32..50,
+        psi in 1u16..1000,
+    ) {
+        let params = SessionParams {
+            payload_size,
+            block_count,
+            symbol_size,
+            source_symbols_per_block: source_k,
+            total_symbols_per_block: total_k,
+            raptorq: RaptorQParams { z, n, psi },
+            payload_digest: [0xCD; 32],
+        };
+        let header = SessionHeader::new(session_id, params);
+        let bytes = header.to_vec();
+        let parsed = SessionHeader::from_bytes(&bytes).unwrap();
+        prop_assert_eq!(parsed.params(), header.params());
+        prop_assert_eq!(parsed.crc32c(), header.crc32c());
+    }
 }
