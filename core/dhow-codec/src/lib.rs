@@ -9,8 +9,11 @@ pub mod blake3;
 pub mod chunker;
 pub mod crc32c;
 pub mod fec;
+pub mod frame;
 #[cfg(test)]
 mod fec_test;
+#[cfg(test)]
+mod frame_test;
 #[cfg(test)]
 mod integrity_test;
 
