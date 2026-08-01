@@ -226,7 +226,13 @@ impl SessionHeader {
     pub fn version(&self) -> u8 { self.version }
     pub fn session_id(&self) -> [u8; 16] { self.session_id }
     pub fn params(&self) -> &SessionParams { &self.params }
+    /// Returns the CRC32C checksum of the session header.
     pub fn crc32c(&self) -> u32 { self.crc32c }
+
+    /// Returns the payload digest for verification.
+    pub fn payload_digest(&self) -> [u8; 32] {
+        self.params.payload_digest
+    }
 }
 
 /// Verifies that the payload digest matches the given data.
