@@ -8,6 +8,7 @@
 pub mod blake3;
 pub mod chunker;
 pub mod crc32c;
+pub mod fec;
 #[cfg(test)]
 mod integrity_test;
 
