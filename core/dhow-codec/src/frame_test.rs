@@ -8,6 +8,31 @@ fn test_key() -> [u8; 32] {
 }
 
 #[test]
+fn test_frame_header_field_accessors() {
+    let session_id = [0x42; 16];
+    let header = FrameHeader::new(FrameType::Repair, session_id, 3, 7, b"test");
+    assert_eq!(header.magic(), MAGIC);
+    assert_eq!(header.version(), VERSION);
+    assert_eq!(header.frame_type(), FrameType::Repair);
+    assert_eq!(header.frame_type_raw(), 1);
+    assert_eq!(header.session_id(), session_id);
+    assert_eq!(header.block_index(), 3);
+    assert_eq!(header.symbol_index(), 7);
+    assert_eq!(header.payload_length(), 4);
+    assert_eq!(header.reserved(), 0);
+    assert_ne!(header.crc32c(), 0);
+}
+
+#[test]
+fn test_frame_header_all_frame_types() {
+    let session_id = [0; 16];
+    for ft in [FrameType::Session, FrameType::Repair, FrameType::Manifest] {
+        let header = FrameHeader::new(ft, session_id, 0, 0, b"x");
+        assert_eq!(header.frame_type(), ft);
+    }
+}
+
+#[test]
 fn test_frame_type_values() {
     assert_eq!(FrameType::Session as u8, 0);
     assert_eq!(FrameType::Repair as u8, 1);
