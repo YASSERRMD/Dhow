@@ -26,6 +26,19 @@ mod tests {
     }
 
     #[test]
+    fn test_fec_try_with_mtu_valid() {
+        let params = fec::FecParams::try_with_mtu(128);
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().mtu(), 128);
+    }
+
+    #[test]
+    fn test_fec_try_with_mtu_invalid() {
+        let params = fec::FecParams::try_with_mtu(10);
+        assert!(params.is_err());
+    }
+
+    #[test]
     fn test_fec_round_trip_source_only() {
         let data: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
         let params = fec::FecParams::new();
