@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 thiserror = "2.0"
 blake3 = "1.5"
+raptorq = "2.0"
 
 [dev-dependencies]
 hex = "0.4"
