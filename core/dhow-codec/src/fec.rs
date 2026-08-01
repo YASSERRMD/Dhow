@@ -36,9 +36,7 @@ pub struct FecParams {
 impl FecParams {
     /// Creates FEC parameters with the default MTU.
     pub fn new() -> Self {
-        Self {
-            mtu: DEFAULT_MTU,
-        }
+        Self { mtu: DEFAULT_MTU }
     }
 
     /// Creates FEC parameters with a custom MTU.
@@ -137,7 +135,10 @@ impl FecDecoder {
 }
 
 /// Decodes packets back into the original payload.
-pub fn decode(packets: &[EncodingPacket], config: &ObjectTransmissionInformation) -> Option<Vec<u8>> {
+pub fn decode(
+    packets: &[EncodingPacket],
+    config: &ObjectTransmissionInformation,
+) -> Option<Vec<u8>> {
     let mut decoder = Decoder::new(*config);
     for packet in packets {
         decoder.add_new_packet(packet.clone());

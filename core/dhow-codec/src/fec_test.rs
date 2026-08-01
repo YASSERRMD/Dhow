@@ -89,7 +89,7 @@ mod tests {
         let repair = encoder.repair_packets(5);
         let mixed = encoder.packets(5);
 
-        assert!(source.len() > 0);
+        assert!(!source.is_empty());
         assert!(repair.len() >= 5);
         // mixed = source + repair per block
         assert!(mixed.len() >= source.len());
