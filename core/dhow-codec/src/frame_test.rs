@@ -8,6 +8,21 @@ fn test_key() -> [u8; 32] {
 }
 
 #[test]
+fn test_frame_payload_truncated() {
+    let session_id = [0; 16];
+    let key = test_key();
+    let header = FrameHeader::new(FrameType::Repair, session_id, 0, 0, b"full payload");
+    let frame = Frame::build(&header, b"full payload", &key);
+    let mut bytes = frame.to_vec();
+
+    // Truncate the payload
+    bytes.truncate(FRAME_HEADER_SIZE + 5);
+
+    let result = Frame::from_bytes(&bytes, &key);
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_frame_header_field_accessors() {
     let session_id = [0x42; 16];
     let header = FrameHeader::new(FrameType::Repair, session_id, 3, 7, b"test");
