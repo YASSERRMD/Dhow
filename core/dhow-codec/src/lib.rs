@@ -11,6 +11,9 @@ pub mod crc32c;
 pub mod fec;
 #[cfg(test)]
 mod fec_test;
+pub mod frame;
+#[cfg(test)]
+mod frame_test;
 #[cfg(test)]
 mod integrity_test;
 
@@ -89,6 +92,10 @@ pub enum FrameError {
     /// The frame header is too short.
     #[error("frame header too short: {length} bytes (minimum 46)")]
     HeaderTooShort { length: usize },
+
+    /// The reserved field is non-zero.
+    #[error("reserved field must be zero, got {value}")]
+    ReservedFieldNonZero { value: u16 },
 }
 
 /// Errors that can occur during session operations.
@@ -174,6 +181,10 @@ pub enum CodecError {
     #[error("frame error: {0}")]
     Frame(#[from] FrameError),
 
+    /// Frame payload exceeds maximum size.
+    #[error("frame payload too large: {length} bytes (max {max}")]
+    FramePayloadTooLarge { length: usize, max: usize },
+
     /// Session error.
     #[error("session error: {0}")]
     Session(#[from] SessionError),
@@ -212,6 +223,27 @@ mod tests {
     }
 
     #[test]
+    fn test_frame_error_reserved_nonzero() {
+        let err = FrameError::ReservedFieldNonZero { value: 1 };
+        assert!(err.to_string().contains("must be zero"));
+    }
+
+    #[test]
+    fn test_frame_error_crc_mismatch() {
+        let err = FrameError::CrcMismatch {
+            expected: 1,
+            actual: 2,
+        };
+        assert!(err.to_string().contains("CRC32C mismatch"));
+    }
+
+    #[test]
+    fn test_frame_error_mac_verification() {
+        let err = FrameError::MacVerificationFailed;
+        assert!(err.to_string().contains("MAC verification"));
+    }
+
+    #[test]
     fn test_session_error_display() {
         let err = SessionError::NotInitialized;
         assert!(err.to_string().contains("not initialized"));
@@ -235,6 +267,15 @@ mod tests {
         let frame_err = FrameError::UnsupportedVersion { version: 99 };
         let codec_err = CodecError::from(frame_err);
         assert!(codec_err.to_string().contains("frame error"));
+    }
+
+    #[test]
+    fn test_codec_error_frame_payload_too_large() {
+        let codec_err = CodecError::FramePayloadTooLarge {
+            length: 70000,
+            max: 65535,
+        };
+        assert!(codec_err.to_string().contains("too large"));
     }
 
     #[test]

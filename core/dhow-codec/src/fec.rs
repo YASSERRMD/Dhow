@@ -21,13 +21,14 @@
 //! assert_eq!(decoded.unwrap(), data);
 //! ```
 
+use crate::FecError;
 use raptorq::{Decoder, Encoder, EncodingPacket, ObjectTransmissionInformation};
 
 /// Default maximum packet size for FEC encoding.
 pub const DEFAULT_MTU: u16 = 1024;
 
 /// Parameters for FEC encoding/decoding.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FecParams {
     /// Maximum packet size in bytes (MTU).
     mtu: u16,
@@ -45,6 +46,17 @@ impl FecParams {
     pub fn with_mtu(mtu: u16) -> Self {
         assert!(mtu >= 64, "MTU must be at least 64");
         Self { mtu }
+    }
+
+    /// Creates FEC parameters with a custom MTU, returning a Result.
+    ///
+    /// This is the fallible version of `with_mtu`, suitable for contexts
+    /// where panicking on invalid input is not acceptable.
+    pub fn try_with_mtu(mtu: u16) -> Result<Self, FecError> {
+        if mtu < 64 {
+            return Err(FecError::MtuTooSmall { mtu, min: 64 });
+        }
+        Ok(Self { mtu })
     }
 
     /// Returns the MTU.
