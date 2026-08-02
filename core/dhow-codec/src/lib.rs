@@ -19,6 +19,9 @@ mod integrity_test;
 pub mod manifest;
 #[cfg(test)]
 mod manifest_test;
+pub mod qr;
+#[cfg(test)]
+mod qr_test;
 pub mod resume;
 #[cfg(test)]
 mod resume_test;
