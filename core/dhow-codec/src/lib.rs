@@ -344,6 +344,12 @@ mod tests {
     }
 
     #[test]
+    fn test_resume_error_invalid_magic() {
+        let err = ResumeError::InvalidMagic { got: [0, 0, 0, 0] };
+        assert!(err.to_string().contains("invalid resume file magic"));
+    }
+
+    #[test]
     fn test_codec_error_from_chunk() {
         let chunk_err = ChunkError::EmptyPayload;
         let codec_err = CodecError::from(chunk_err);
