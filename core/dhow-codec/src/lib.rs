@@ -19,6 +19,9 @@ mod integrity_test;
 pub mod manifest;
 #[cfg(test)]
 mod manifest_test;
+pub mod pipeline;
+#[cfg(test)]
+mod pipeline_test;
 pub mod qr;
 #[cfg(test)]
 mod qr_test;
