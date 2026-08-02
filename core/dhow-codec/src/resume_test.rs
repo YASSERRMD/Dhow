@@ -2,6 +2,7 @@
 
 use crate::resume::{
     BlockEntry, ResumeFile, ResumeHeader, RESUME_HEADER_SIZE, RESUME_MAGIC, RESUME_VERSION,
+    CRC_COVER_BYTES, INTEGRITY_COVER_BYTES,
 };
 
 fn make_entries() -> Vec<BlockEntry> {
@@ -143,6 +144,15 @@ fn test_resume_empty_entries() {
     let bytes = resume.to_vec();
     let parsed = ResumeFile::from_bytes(&bytes).unwrap();
     assert_eq!(parsed.entries().len(), 0);
+}
+
+#[test]
+fn test_resume_constants() {
+    assert_eq!(RESUME_MAGIC, *b"DHRS");
+    assert_eq!(RESUME_VERSION, 1);
+    assert_eq!(RESUME_HEADER_SIZE, 96);
+    assert_eq!(CRC_COVER_BYTES, 60);
+    assert_eq!(INTEGRITY_COVER_BYTES, 64);
 }
 
 #[test]
