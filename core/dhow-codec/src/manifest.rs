@@ -4,7 +4,7 @@
 //! The manifest is a signed metadata structure describing the dataset
 //! being transferred, carried in a frame of type 2 (Manifest).
 //!
-//! ## Header Layout (fixed 168 bytes)
+//! ## Fixed Header Layout (168 bytes)
 //!
 //! | Offset | Size | Field |
 //! |--------|------|-------|
@@ -20,10 +20,30 @@
 //! | 104 | 64 | Ed25519 Signature |
 //! | 168 | var | File Entries |
 //!
+//! ## File Entry Layout
+//!
+//! | Offset | Size | Field |
+//! |--------|------|-------|
+//! | 0 | 2 | Name Length |
+//! | 2 | variable | Name (UTF-8) |
+//! | 2+len | 8 | File Size |
+//! | 10+len | 32 | File Digest |
+//!
+//! ## Integrity
+//!
+//! - **CRC32C**: Covers bytes 0..100 (magic through reserved2).
+//! - **Ed25519 Signature**: Covers bytes 0..100, verified by the operator's key.
+//! - **Payload Digest**: BLAKE3 of the encrypted payload, for end-to-end verification.
+//!
+//! ## Safety
+//!
+//! File names are sanitized against path traversal attacks:
+//! no leading `/`, no `..`, no null bytes, max length 4096.
+//!
 //! # Example
 //!
 //! ```
-//! use dhow_codec::manifest::{ManifestHeader, FileEntry, Manifest};
+//! use dhow_codec::manifest::{Manifest, ManifestHeader, FileEntry};
 //!
 //! let entries = vec![
 //!     FileEntry::new("hello.txt", 5, [0u8; 32]),
@@ -31,7 +51,7 @@
 //! let header = ManifestHeader::new([0u8; 16], &entries, 5);
 //! let manifest = Manifest::build(&header, &entries, &[0u8; 64]);
 //! let bytes = manifest.to_vec();
-//! let parsed = Manifest::from_bytes(&bytes, &[0u8; 64]).unwrap();
+//! let parsed = Manifest::from_bytes(&bytes).unwrap();
 //! assert_eq!(parsed.entries().len(), 1);
 //! ```
 
