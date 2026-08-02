@@ -197,3 +197,27 @@ fn test_resume_truncated_block_entries() {
         assert_eq!(e1, e2);
         assert_ne!(e1, e3);
     }
+
+    #[test]
+    fn test_block_entry_large_symbol_count() {
+        // 100 symbols = 13 bytes bitmap
+        let bitmap = vec![0xAA; 13];
+        let entry = BlockEntry::new(5, 100, 50, &bitmap);
+        let bytes = entry.to_vec();
+        let (parsed, _) = BlockEntry::from_bytes(&bytes).unwrap();
+        assert_eq!(parsed.symbol_count, 100);
+        assert_eq!(parsed.symbol_bitmap.len(), 13);
+    }
+
+    #[test]
+    fn test_resume_single_block() {
+        let bitmap = vec![0xFF; 2]; // 16 symbols
+        let entry = BlockEntry::new(0, 16, 16, &bitmap);
+        let entries = vec![entry];
+        let header = ResumeHeader::new([0x01; 16], &entries);
+        let resume = ResumeFile::build(&header, &entries);
+        let bytes = resume.to_vec();
+        let parsed = ResumeFile::from_bytes(&bytes).unwrap();
+        assert_eq!(parsed.entries().len(), 1);
+        assert_eq!(parsed.entries()[0].symbols_held, 16);
+    }
