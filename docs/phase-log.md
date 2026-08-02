@@ -1,5 +1,81 @@
 # Phase Log
 
+## Phase 17 - Manifest signing and verification
+
+**Objective:** Sign the manifest with Ed25519 and give the receiver a
+verification pipeline: structure, signature, then policy. Until this phase the
+manifest was transmitted unsigned, so the threat model's central claim - that a
+receiver rejects a transfer whose manifest signature fails - had nothing
+enforcing it.
+
+**Gates:** signature verifies; any single-byte mutation of a signed manifest
+fails; adversarial matrix (oversize claims, traversal names, wrong key,
+downgraded version, replayed session) rejected with distinct errors.
+
+### Defects fixed from earlier phases
+
+Three defects in the Phase 10 manifest wire format, each fixed here:
+
+1. **Signature scope.** The format signed bytes 0..100 only, leaving every file
+   name, size, and digest unauthenticated. An attacker could rewrite an entry
+   to a traversal path and the signature would still verify. The signature now
+   covers the whole manifest with the signature field zeroed. Three tests
+   rewrite a name, a size, and a digest in a signed manifest; all three would
+   have passed under the old scope.
+2. **Path traversal.** The check tested only whether a name *started* with
+   `..`, so `a/../../etc/passwd` was accepted. Every component is now
+   inspected. Backslash is rejected unconditionally, since the sender cannot
+   know whether the receiver treats it as a separator.
+3. **Unbounded allocation.** `Manifest::from_bytes` passed the declared `u32`
+   file count straight to `Vec::with_capacity`, so a manifest claiming
+   `u32::MAX` entries could exhaust memory before a single entry was read. The
+   count is bounded and capacity is reserved against what the buffer could
+   actually hold.
+
+Defects 2 and 3 landed in the same commit as the traversal fix rather than
+separately, because they touch adjacent code in one module.
+
+### Design notes
+
+The expected signer is supplied by the caller, never read from the manifest: a
+key carried inside the structure it signs authenticates nothing.
+
+Verification runs structure, then signature, then policy. Policy limits
+describe what a legitimate sender may claim, so applying them to
+unauthenticated bytes would report attacker-controlled values as meaningful.
+
+`VerifiedManifest` is a distinct type, so extraction code cannot be handed
+unauthenticated metadata by mistake.
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+=== GATE: cargo fmt --check ===        PASS
+=== GATE: cargo clippy -D warnings === PASS
+=== GATE: cargo test ===               PASS
+=== GATE: cargo audit ===              PASS
+=== GATE: cargo deny ===               PASS
+=== GATE: go vet ===                   PASS
+=== GATE: go build ===                 PASS
+=== GATE: golangci-lint ===            PASS
+=== GATE: govulncheck ===              PASS
+
+=== GATE SUMMARY ===
+  Passed: 9
+  Failed: 0
+ALL GATES PASSED
+```
+
+```
+$ cargo test --all
+test result: ok. 239 passed; 0 failed   (dhow-codec)
+test result: ok. 103 passed; 0 failed   (dhow-crypt)
+test result: ok.  11 passed; 0 failed   (end_to_end)
+test result: ok.  12 passed; 0 failed   (doc-tests)
+```
+
+
 ## Phase 16 - Payload AEAD
 
 **Objective:** Encrypt the payload with XChaCha20-Poly1305 before chunking,
