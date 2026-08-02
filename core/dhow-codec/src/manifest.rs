@@ -171,7 +171,7 @@ impl ManifestHeader {
             bytes.push(MANIFEST_VERSION);
             bytes.extend_from_slice(&[0u8; 3]);
             bytes.extend_from_slice(&session_id);
-            bytes.extend_from_slice(&entries.len().to_le_bytes());
+            bytes.extend_from_slice(&(entries.len() as u32).to_le_bytes());
             bytes.extend_from_slice(&total_size.to_le_bytes());
             bytes.extend_from_slice(&payload_digest);
             bytes.extend_from_slice(&[0u8; 32]);
