@@ -4,6 +4,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod key;
+#[cfg(test)]
+mod key_test;
+
 use thiserror::Error;
 
 /// Errors that can occur during key generation and handling.

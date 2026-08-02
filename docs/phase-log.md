@@ -1,5 +1,38 @@
 # Phase Log
 
+## Phase 15 - Key generation and storage
+
+**Objective:** Give `dhow-crypt` the key handling it had only declared errors
+for: Ed25519 identity keypairs for manifest signing, a symmetric operator key
+that per-transfer keys derive from, a versioned and checksummed key file
+format, owner-only permission enforcement, and zeroization on drop.
+
+**Gates:** key file round trips; permission test; every single-byte mutation of
+a key file is rejected; secrets do not appear in `Debug` output.
+
+### Notes
+
+`VerifyingKey::from_bytes` does not reject every arbitrary 32-byte string. An
+all-ones encoding decompresses to a valid curve point, so the negative test
+uses encodings whose implied x-squared is not a quadratic residue.
+
+Secret key files are created with mode 0600 through `OpenOptions::mode` rather
+than chmodded after writing, so they are never briefly readable by other users.
+Loading rejects any file carrying group or other permission bits.
+
+### Gate output
+
+```
+$ cargo test -p dhow-crypt
+running 42 tests
+test result: ok. 42 passed; 0 failed; 0 ignored
+```
+
+```
+$ cargo clippy --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s)
+```
+
 ## Phase 14 - Session state machine and receive pipeline
 
 **Objective:** Add the session state machine that tracks a transfer through
