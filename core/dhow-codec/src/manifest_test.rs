@@ -218,6 +218,16 @@ fn test_manifest_single_entry() {
     assert_eq!(parsed.entries()[0].digest, [0x99; 32]);
 }
 
+#[test]
+fn test_manifest_header_set_signature() {
+    let entries = make_entries();
+    let header = ManifestHeader::new([0; 16], &entries, 15);
+    let mut header = header;
+    let sig = [0xDE; 64];
+    header.set_signature(sig);
+    assert_eq!(header.signature(), sig);
+}
+
 use proptest::prelude::*;
 
 proptest! {
