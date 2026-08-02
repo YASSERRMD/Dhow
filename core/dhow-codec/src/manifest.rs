@@ -55,8 +55,8 @@
 //! assert_eq!(parsed.entries().len(), 1);
 //! ```
 
-use crate::crc32c::crc32c_digest;
 use crate::ManifestError;
+use crate::crc32c::crc32c_digest;
 
 /// Magic bytes for Dhow manifests (ASCII "DHMF").
 pub const MANIFEST_MAGIC: [u8; 4] = *b"DHMF";
@@ -129,22 +129,17 @@ impl FileEntry {
         }
 
         let name_bytes = &bytes[2..2 + name_len];
-        let name = String::from_utf8(name_bytes.to_vec()).map_err(|_| {
-            ManifestError::InvalidKey {
+        let name =
+            String::from_utf8(name_bytes.to_vec()).map_err(|_| ManifestError::InvalidKey {
                 details: "file name contains invalid UTF-8".to_string(),
-            }
-        })?;
+            })?;
 
         // Path traversal check
         if name.starts_with('/') || name.starts_with("..") || name.contains('\0') {
             return Err(ManifestError::PathTraversal { name: name.clone() });
         }
 
-        let size = u64::from_le_bytes(
-            bytes[2 + name_len..10 + name_len]
-                .try_into()
-                .unwrap(),
-        );
+        let size = u64::from_le_bytes(bytes[2 + name_len..10 + name_len].try_into().unwrap());
 
         let digest: [u8; 32] = bytes[10 + name_len..42 + name_len].try_into().unwrap();
 
@@ -212,7 +207,10 @@ impl ManifestHeader {
         }
     }
 
-    /// Sets the signature and recomputes CRC32C.
+    /// Sets the Ed25519 signature on the header.
+    ///
+    /// The signature should be computed over bytes 0..100 of the
+    /// serialized header (magic through CRC32C field).
     pub fn set_signature(&mut self, signature: [u8; 64]) {
         self.signature = signature;
         // CRC doesn't cover the signature, so no recompute needed
@@ -298,14 +296,30 @@ impl ManifestHeader {
         })
     }
 
-    pub fn magic(&self) -> [u8; 4] { self.magic }
-    pub fn version(&self) -> u8 { self.version }
-    pub fn session_id(&self) -> [u8; 16] { self.session_id }
-    pub fn file_count(&self) -> u32 { self.file_count }
-    pub fn total_size(&self) -> u64 { self.total_size }
-    pub fn payload_digest(&self) -> [u8; 32] { self.payload_digest }
-    pub fn crc32c(&self) -> u32 { self.crc32c }
-    pub fn signature(&self) -> [u8; 64] { self.signature }
+    pub fn magic(&self) -> [u8; 4] {
+        self.magic
+    }
+    pub fn version(&self) -> u8 {
+        self.version
+    }
+    pub fn session_id(&self) -> [u8; 16] {
+        self.session_id
+    }
+    pub fn file_count(&self) -> u32 {
+        self.file_count
+    }
+    pub fn total_size(&self) -> u64 {
+        self.total_size
+    }
+    pub fn payload_digest(&self) -> [u8; 32] {
+        self.payload_digest
+    }
+    pub fn crc32c(&self) -> u32 {
+        self.crc32c
+    }
+    pub fn signature(&self) -> [u8; 64] {
+        self.signature
+    }
 }
 
 /// A complete manifest: header + signature + file entries.
@@ -357,6 +371,10 @@ impl Manifest {
         Ok(Self { header, entries })
     }
 
-    pub fn header(&self) -> &ManifestHeader { &self.header }
-    pub fn entries(&self) -> &[FileEntry] { &self.entries }
+    pub fn header(&self) -> &ManifestHeader {
+        &self.header
+    }
+    pub fn entries(&self) -> &[FileEntry] {
+        &self.entries
+    }
 }
