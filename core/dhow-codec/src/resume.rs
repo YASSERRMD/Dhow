@@ -317,4 +317,14 @@ impl ResumeFile {
 
     pub fn header(&self) -> &ResumeHeader { &self.header }
     pub fn entries(&self) -> &[BlockEntry] { &self.entries }
+
+    /// Returns the session ID from the header.
+    pub fn session_id(&self) -> [u8; 16] {
+        self.header.session_id()
+    }
+
+    /// Returns the block count from the header.
+    pub fn block_count(&self) -> u32 {
+        self.header.block_count()
+    }
 }
