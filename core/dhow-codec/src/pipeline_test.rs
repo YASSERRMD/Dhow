@@ -25,7 +25,7 @@ fn test_pipeline_simple() {
     let frames = pipeline.encode(payload);
     assert!(frames.is_ok());
     let frames = frames.unwrap();
-    assert!(frames.len() >= 1); // at least source symbols
+    assert!(!frames.is_empty()); // at least source symbols
 }
 
 #[test]
@@ -85,8 +85,11 @@ fn test_pipeline_preserves_data() {
     params.total_symbols_per_block = 1;
     let pipeline = Pipeline::new([0xAA; 16], params, [0xBB; 32]);
     let frames = pipeline.encode(&payload).unwrap();
-    assert!(frames.len() >= 1);
+    assert!(!frames.is_empty());
     // Verify first frame has the payload
     let first_frame = &frames[0].frame;
-    assert_eq!(first_frame.header().frame_type(), crate::frame::FrameType::Repair);
+    assert_eq!(
+        first_frame.header().frame_type(),
+        crate::frame::FrameType::Repair
+    );
 }

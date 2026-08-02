@@ -31,12 +31,12 @@
 //! assert!(frames.len() > 0);
 //! ```
 
-use crate::chunker::{ChunkMap, ChunkParams};
-use crate::fec::{encode as fec_encode, FecParams};
-use crate::frame::{Frame, FrameHeader, FrameType};
-use crate::session::SessionParams;
 use crate::CodecError;
 use crate::FrameError;
+use crate::chunker::{ChunkMap, ChunkParams};
+use crate::fec::{FecParams, encode as fec_encode};
+use crate::frame::{Frame, FrameHeader, FrameType};
+use crate::session::SessionParams;
 
 /// The session key for MAC computation.
 pub type SessionKey = [u8; 32];
@@ -56,11 +56,7 @@ pub struct Pipeline {
 
 impl Pipeline {
     /// Creates a new pipeline with the given session parameters.
-    pub fn new(
-        session_id: [u8; 16],
-        params: SessionParams,
-        session_key: SessionKey,
-    ) -> Self {
+    pub fn new(session_id: [u8; 16], params: SessionParams, session_key: SessionKey) -> Self {
         Self {
             session_id,
             params,
@@ -79,7 +75,10 @@ impl Pipeline {
 
         // Validate payload size
         if payload.len() != self.params.payload_size as usize {
-            return Err(FrameError::PayloadTooLarge { length: payload.len() as u32 }.into());
+            return Err(FrameError::PayloadTooLarge {
+                length: payload.len() as u32,
+            }
+            .into());
         }
 
         // Create chunker
@@ -101,7 +100,8 @@ impl Pipeline {
             let encoder = fec_encode(block, &fec_params);
 
             // Generate repair packets (1.5x overhead)
-            let repair_count = self.params.total_symbols_per_block - self.params.source_symbols_per_block;
+            let repair_count =
+                self.params.total_symbols_per_block - self.params.source_symbols_per_block;
             let source_packets = encoder.source_packets();
             let repair_packets = encoder.repair_packets(repair_count);
 
@@ -112,9 +112,9 @@ impl Pipeline {
                     self.session_id,
                     block_idx as u32,
                     symbol_idx as u32,
-                    &packet.data(),
+                    packet.data(),
                 );
-                let frame = Frame::build(&header, &packet.data(), &self.session_key);
+                let frame = Frame::build(&header, packet.data(), &self.session_key);
                 frames.push(PreparedFrame { frame });
             }
 
@@ -126,9 +126,9 @@ impl Pipeline {
                     self.session_id,
                     block_idx as u32,
                     symbol_idx,
-                    &packet.data(),
+                    packet.data(),
                 );
-                let frame = Frame::build(&header, &packet.data(), &self.session_key);
+                let frame = Frame::build(&header, packet.data(), &self.session_key);
                 frames.push(PreparedFrame { frame });
             }
         }
