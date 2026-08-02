@@ -60,8 +60,11 @@ pub const RESUME_VERSION: u8 = 1;
 /// Fixed resume header size before block entries.
 pub const RESUME_HEADER_SIZE: usize = 96;
 
-/// Fixed header size used for CRC (bytes 0..60).
+/// Fixed header size used for CRC32C computation (bytes 0..60).
 pub const CRC_COVER_BYTES: usize = 60;
+
+/// Size of the full header used for integrity digest (bytes 0..64).
+pub const INTEGRITY_COVER_BYTES: usize = 64;
 
 /// One block entry within the resume file.
 #[derive(Debug, Clone, PartialEq, Eq)]
