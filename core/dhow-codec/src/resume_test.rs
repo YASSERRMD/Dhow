@@ -145,6 +145,18 @@ fn test_resume_empty_entries() {
     assert_eq!(parsed.entries().len(), 0);
 }
 
+#[test]
+fn test_resume_truncated_block_entries() {
+    let entries = make_entries();
+    let header = ResumeHeader::new([0; 16], &entries);
+    let resume = ResumeFile::build(&header, &entries);
+    let mut bytes = resume.to_vec();
+    // Truncate block entries
+    bytes.truncate(RESUME_HEADER_SIZE + 5);
+    let result = ResumeFile::from_bytes(&bytes);
+    assert!(result.is_err());
+}
+
     #[test]
     fn test_resume_header_accessors() {
         let entries = make_entries();
