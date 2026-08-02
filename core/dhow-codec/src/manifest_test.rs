@@ -142,3 +142,21 @@ fn test_manifest_header_accessors() {
     assert_eq!(header.crc32c(), header.crc32c());
     assert_eq!(header.signature(), [0u8; 64]);
 }
+
+use proptest::prelude::*;
+
+proptest! {
+    #[test]
+    fn prop_manifest_round_trip(
+        name in "[a-zA-Z0-9_]+"
+    ) {
+        let filename = format!("{}.txt", name);
+        let entries = vec![FileEntry::new(&filename, 100, [0xAA; 32])];
+        let header = ManifestHeader::new([0x42; 16], &entries, 100);
+        let manifest = Manifest::build(&header, &entries, &[0xCD; 64]);
+        let bytes = manifest.to_vec();
+        let parsed = Manifest::from_bytes(&bytes).unwrap();
+        prop_assert_eq!(parsed.entries().len(), 1);
+        prop_assert_eq!(parsed.entries()[0].name.clone(), filename);
+    }
+}
