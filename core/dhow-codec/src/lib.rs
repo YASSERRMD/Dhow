@@ -19,6 +19,9 @@ mod integrity_test;
 pub mod manifest;
 #[cfg(test)]
 mod manifest_test;
+pub mod resume;
+#[cfg(test)]
+mod resume_test;
 pub mod session;
 #[cfg(test)]
 mod session_test;
@@ -338,6 +341,12 @@ mod tests {
     fn test_resume_error_display() {
         let err = ResumeError::IntegrityCheckFailed;
         assert!(err.to_string().contains("integrity"));
+    }
+
+    #[test]
+    fn test_resume_error_invalid_magic() {
+        let err = ResumeError::InvalidMagic { got: [0, 0, 0, 0] };
+        assert!(err.to_string().contains("invalid resume file magic"));
     }
 
     #[test]
