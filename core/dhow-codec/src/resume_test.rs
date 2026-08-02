@@ -156,6 +156,18 @@ fn test_resume_constants() {
 }
 
 #[test]
+fn test_resume_header_empty_bytes() {
+    let result = ResumeHeader::from_bytes(&[]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_resume_file_empty_bytes() {
+    let result = ResumeFile::from_bytes(&[]);
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_resume_truncated_block_entries() {
     let entries = make_entries();
     let header = ResumeHeader::new([0; 16], &entries);
