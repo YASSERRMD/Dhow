@@ -15,9 +15,9 @@ import (
 
 // Config holds logger configuration.
 type Config struct {
-	Level   string // "debug", "info", "warn", "error", "silent"
-	Format  string // "text" or "json"
-	Output  string // "stderr" or "stdout"
+	Level  string // "debug", "info", "warn", "error", "silent"
+	Format string // "text" or "json"
+	Output string // "stderr" or "stdout"
 }
 
 // DefaultConfig returns the default logger configuration.
