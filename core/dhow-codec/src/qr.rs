@@ -42,7 +42,8 @@ pub struct QrCodeEncoder {
 impl QrCodeEncoder {
     /// Encodes binary data as a QR code with medium error correction.
     pub fn encode(data: &[u8]) -> Result<Self, QrError> {
-        let inner = QrCode::encode_binary(data, QrCodeEcc::Medium).map_err(|_| QrError::DataTooLong)?;
+        let inner =
+            QrCode::encode_binary(data, QrCodeEcc::Medium).map_err(|_| QrError::DataTooLong)?;
         Ok(Self { inner })
     }
 
