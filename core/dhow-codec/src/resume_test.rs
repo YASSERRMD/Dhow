@@ -1,8 +1,8 @@
 //! Tests for the resume file wire format module.
 
 use crate::resume::{
-    BlockEntry, ResumeFile, ResumeHeader, RESUME_HEADER_SIZE, RESUME_MAGIC, RESUME_VERSION,
-    CRC_COVER_BYTES, INTEGRITY_COVER_BYTES,
+    BlockEntry, CRC_COVER_BYTES, INTEGRITY_COVER_BYTES, RESUME_HEADER_SIZE, RESUME_MAGIC,
+    RESUME_VERSION, ResumeFile, ResumeHeader,
 };
 
 fn make_entries() -> Vec<BlockEntry> {
@@ -167,57 +167,57 @@ fn test_resume_truncated_block_entries() {
     assert!(result.is_err());
 }
 
-    #[test]
-    fn test_resume_header_accessors() {
-        let entries = make_entries();
-        let header = ResumeHeader::new([0x55; 16], &entries);
-        assert_eq!(header.magic(), RESUME_MAGIC);
-        assert_eq!(header.version(), RESUME_VERSION);
-        assert_eq!(header.session_id(), [0x55; 16]);
-        assert_eq!(header.block_count(), 2);
-        assert_ne!(header.crc32c(), 0);
-        assert_ne!(header.integrity_digest(), [0u8; 32]);
-    }
+#[test]
+fn test_resume_header_accessors() {
+    let entries = make_entries();
+    let header = ResumeHeader::new([0x55; 16], &entries);
+    assert_eq!(header.magic(), RESUME_MAGIC);
+    assert_eq!(header.version(), RESUME_VERSION);
+    assert_eq!(header.session_id(), [0x55; 16]);
+    assert_eq!(header.block_count(), 2);
+    assert_ne!(header.crc32c(), 0);
+    assert_ne!(header.integrity_digest(), [0u8; 32]);
+}
 
-    #[test]
-    fn test_resume_file_accessors() {
-        let entries = make_entries();
-        let header = ResumeHeader::new([0xAA; 16], &entries);
-        let resume = ResumeFile::build(&header, &entries);
-        assert_eq!(resume.session_id(), [0xAA; 16]);
-        assert_eq!(resume.block_count(), 2);
-        assert_eq!(resume.entries().len(), 2);
-    }
+#[test]
+fn test_resume_file_accessors() {
+    let entries = make_entries();
+    let header = ResumeHeader::new([0xAA; 16], &entries);
+    let resume = ResumeFile::build(&header, &entries);
+    assert_eq!(resume.session_id(), [0xAA; 16]);
+    assert_eq!(resume.block_count(), 2);
+    assert_eq!(resume.entries().len(), 2);
+}
 
-    #[test]
-    fn test_block_entry_equality() {
-        let e1 = BlockEntry::new(0, 8, 2, &[0b00000101]);
-        let e2 = BlockEntry::new(0, 8, 2, &[0b00000101]);
-        let e3 = BlockEntry::new(0, 8, 2, &[0b00000010]);
-        assert_eq!(e1, e2);
-        assert_ne!(e1, e3);
-    }
+#[test]
+fn test_block_entry_equality() {
+    let e1 = BlockEntry::new(0, 8, 2, &[0b00000101]);
+    let e2 = BlockEntry::new(0, 8, 2, &[0b00000101]);
+    let e3 = BlockEntry::new(0, 8, 2, &[0b00000010]);
+    assert_eq!(e1, e2);
+    assert_ne!(e1, e3);
+}
 
-    #[test]
-    fn test_block_entry_large_symbol_count() {
-        // 100 symbols = 13 bytes bitmap
-        let bitmap = vec![0xAA; 13];
-        let entry = BlockEntry::new(5, 100, 50, &bitmap);
-        let bytes = entry.to_vec();
-        let (parsed, _) = BlockEntry::from_bytes(&bytes).unwrap();
-        assert_eq!(parsed.symbol_count, 100);
-        assert_eq!(parsed.symbol_bitmap.len(), 13);
-    }
+#[test]
+fn test_block_entry_large_symbol_count() {
+    // 100 symbols = 13 bytes bitmap
+    let bitmap = vec![0xAA; 13];
+    let entry = BlockEntry::new(5, 100, 50, &bitmap);
+    let bytes = entry.to_vec();
+    let (parsed, _) = BlockEntry::from_bytes(&bytes).unwrap();
+    assert_eq!(parsed.symbol_count, 100);
+    assert_eq!(parsed.symbol_bitmap.len(), 13);
+}
 
-    #[test]
-    fn test_resume_single_block() {
-        let bitmap = vec![0xFF; 2]; // 16 symbols
-        let entry = BlockEntry::new(0, 16, 16, &bitmap);
-        let entries = vec![entry];
-        let header = ResumeHeader::new([0x01; 16], &entries);
-        let resume = ResumeFile::build(&header, &entries);
-        let bytes = resume.to_vec();
-        let parsed = ResumeFile::from_bytes(&bytes).unwrap();
-        assert_eq!(parsed.entries().len(), 1);
-        assert_eq!(parsed.entries()[0].symbols_held, 16);
-    }
+#[test]
+fn test_resume_single_block() {
+    let bitmap = vec![0xFF; 2]; // 16 symbols
+    let entry = BlockEntry::new(0, 16, 16, &bitmap);
+    let entries = vec![entry];
+    let header = ResumeHeader::new([0x01; 16], &entries);
+    let resume = ResumeFile::build(&header, &entries);
+    let bytes = resume.to_vec();
+    let parsed = ResumeFile::from_bytes(&bytes).unwrap();
+    assert_eq!(parsed.entries().len(), 1);
+    assert_eq!(parsed.entries()[0].symbols_held, 16);
+}

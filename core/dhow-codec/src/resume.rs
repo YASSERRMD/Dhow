@@ -47,9 +47,9 @@
 //! assert_eq!(parsed.entries().len(), 1);
 //! ```
 
+use crate::ResumeError;
 use crate::blake3::blake3_digest;
 use crate::crc32c::crc32c_digest;
-use crate::ResumeError;
 
 /// Magic bytes for Dhow resume files (ASCII "DHRS").
 pub const RESUME_MAGIC: [u8; 4] = *b"DHRS";
@@ -120,7 +120,7 @@ impl BlockEntry {
         let symbols_held = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
 
         // Bitmap size = ceil(symbol_count / 8)
-        let bitmap_len = ((symbol_count as usize) + 7) / 8;
+        let bitmap_len = (symbol_count as usize).div_ceil(8);
         if bytes.len() < 12 + bitmap_len {
             return Err(ResumeError::Truncated {
                 expected: 12 + bitmap_len,
@@ -130,12 +130,15 @@ impl BlockEntry {
 
         let symbol_bitmap = bytes[12..12 + bitmap_len].to_vec();
 
-        Ok((Self {
-            block_index,
-            symbol_count,
-            symbols_held,
-            symbol_bitmap,
-        }, 12 + bitmap_len))
+        Ok((
+            Self {
+                block_index,
+                symbol_count,
+                symbols_held,
+                symbol_bitmap,
+            },
+            12 + bitmap_len,
+        ))
     }
 }
 
@@ -264,12 +267,24 @@ impl ResumeHeader {
         })
     }
 
-    pub fn magic(&self) -> [u8; 4] { self.magic }
-    pub fn version(&self) -> u8 { self.version }
-    pub fn session_id(&self) -> [u8; 16] { self.session_id }
-    pub fn block_count(&self) -> u32 { self.block_count }
-    pub fn crc32c(&self) -> u32 { self.crc32c }
-    pub fn integrity_digest(&self) -> [u8; 32] { self.integrity_digest }
+    pub fn magic(&self) -> [u8; 4] {
+        self.magic
+    }
+    pub fn version(&self) -> u8 {
+        self.version
+    }
+    pub fn session_id(&self) -> [u8; 16] {
+        self.session_id
+    }
+    pub fn block_count(&self) -> u32 {
+        self.block_count
+    }
+    pub fn crc32c(&self) -> u32 {
+        self.crc32c
+    }
+    pub fn integrity_digest(&self) -> [u8; 32] {
+        self.integrity_digest
+    }
 }
 
 /// A complete resume file: header + block entries.
@@ -319,8 +334,12 @@ impl ResumeFile {
         Ok(Self { header, entries })
     }
 
-    pub fn header(&self) -> &ResumeHeader { &self.header }
-    pub fn entries(&self) -> &[BlockEntry] { &self.entries }
+    pub fn header(&self) -> &ResumeHeader {
+        &self.header
+    }
+    pub fn entries(&self) -> &[BlockEntry] {
+        &self.entries
+    }
 
     /// Returns the session ID from the header.
     pub fn session_id(&self) -> [u8; 16] {
