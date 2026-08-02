@@ -95,6 +95,28 @@ fn test_file_entry_parent_dir() {
 }
 
 #[test]
+fn test_file_entry_backslash() {
+    let entry = FileEntry::new("..\\secret", 0, [0; 32]);
+    let bytes = entry.to_vec();
+    let result = FileEntry::from_bytes(&bytes);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_manifest_many_entries() {
+    let entries: Vec<FileEntry> = (0..10)
+        .map(|i| FileEntry::new(&format!("file{}.txt", i), i as u64, [i as u8; 32]))
+        .collect();
+    let header = ManifestHeader::new([0; 16], &entries, 45);
+    let manifest = Manifest::build(&header, &entries, &[0u8; 64]);
+    let bytes = manifest.to_vec();
+    let parsed = Manifest::from_bytes(&bytes).unwrap();
+    assert_eq!(parsed.entries().len(), 10);
+    assert_eq!(parsed.entries()[0].name, "file0.txt");
+    assert_eq!(parsed.entries()[9].name, "file9.txt");
+}
+
+#[test]
 fn test_manifest_header_unsupported_version() {
     let entries = make_entries();
     let header = ManifestHeader::new([0; 16], &entries, 15);
