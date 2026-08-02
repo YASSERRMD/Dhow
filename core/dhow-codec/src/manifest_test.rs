@@ -65,6 +65,23 @@ fn test_manifest_header_to_vec_size() {
 }
 
 #[test]
+fn test_file_entry_truncated() {
+    let entry = FileEntry::new("test.txt", 0, [0; 32]);
+    let mut bytes = entry.to_vec();
+    bytes.truncate(5);
+    let result = FileEntry::from_bytes(&bytes);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_file_entry_null_byte() {
+    let entry = FileEntry::new("test\0.txt", 0, [0; 32]);
+    let bytes = entry.to_vec();
+    let result = FileEntry::from_bytes(&bytes);
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_manifest_header_from_bytes_round_trip() {
     let entries = make_entries();
     let header = ManifestHeader::new([0x55; 16], &entries, 15);
