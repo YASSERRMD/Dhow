@@ -1,5 +1,30 @@
 # Phase Log
 
+## Phase 13 - Frame pipeline
+
+**Objective:** Assemble frame pipeline that combines chunking, FEC encoding,
+and frame header construction into a single pipeline.
+
+**Gates:** encode produces frames with correct structure; multiple blocks work;
+wrong payload size rejected; proptest on small data.
+
+### Gate output
+
+#### Rust tests
+
+```
+$ cargo test -p dhow-codec --lib pipeline_test
+running 7 tests
+test result: ok. 7 passed; 0 failed; 0 ignored
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+4
+```
+
 ## Phase 12 - QR encode/decode
 
 **Objective:** QR code encoding and terminal rendering. Encode frame bytes as QR
