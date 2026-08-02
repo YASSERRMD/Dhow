@@ -1,5 +1,109 @@
 # Phase Log
 
+## Phase 20 - CLI surface and dataset packaging
+
+**Objective:** Make `dhow` a runnable binary. Implement `keygen`, `send`,
+`recv`, `verify`, and `version` with documented exit codes and `--json` output,
+plus deterministic dataset packing and traversal-safe extraction.
+
+**Gates:** exit-code contract tests; byte-identical archive across two runs;
+traversal and bomb fixtures rejected; a full send and receive round trip
+recovers the dataset byte for byte.
+
+### Starting point
+
+`cli/cmd/dhow/main.go` was `func main() {}`. There was no command surface and
+no way to run a transfer.
+
+### Design notes
+
+Packing records no timestamp, uid, gid, or inode, and sorts entries by name, so
+the same tree produces identical bytes on every run and machine. The only mode
+bit kept is the executable bit, which changes what a file *is* rather than
+describing when it was touched. Symlinks are skipped: following one could pull
+in a file from outside the tree, and recording one would let a receiver be
+talked into creating a link pointing anywhere.
+
+Extraction treats the archive as hostile even after the signature, because a
+signed archive may still have been built by a mistaken sender. Names are
+re-validated per component, the declared entry count is bounded before it sizes
+an allocation, a declared file size is checked against the remaining buffer
+before it is used to slice, and files are created with `O_EXCL` so anything
+already at the target cannot be followed or clobbered.
+
+Subcommands use the standard library `flag` package rather than adding cobra.
+The UX is equivalent and the dependency is not worth adding to a project whose
+supply chain is audited on every build.
+
+`send` writes frames to a directory and `recv` reads them back. The optical
+layer is a later phase; this transport keeps the whole codec and crypto path
+exercisable without hardware. The transfer record beside the frames carries
+what a receiver needs and no secret; in the finished product it becomes the
+signed manifest inside the frame stream.
+
+### Verified by hand
+
+```
+$ dhow keygen -out operator.key
+$ dhow send -key operator.key -in data -out frames
+session   afa26da9574bb483c967336bc411071f
+files     3
+payload   5118 bytes
+frames    35
+$ dhow recv -key operator.key -in frames -out received
+accepted  35 frames    rejected  0 frames    files 3
+$ diff -r data received      # identical, executable bit preserved
+
+$ rm frames/frame-00000[0-5].bin   # drop 6 frames
+$ dhow recv ...                    # still identical
+$ dhow recv -key wrong.key ...     # exit 4, 29 frames rejected, nothing written
+$ dhow send -in /nonexistent       # exit 2
+```
+
+### Gate findings
+
+`govulncheck` failed on GO-2026-4602, a `FileInfo` escape from a `Root` in
+`os`. The finding is real rather than inherited: the new packing code reaches
+it through `filepath.WalkDir`, and the gate started failing the moment that
+code landed. Fixed by pinning the toolchain to go1.25.8.
+
+`errcheck` flagged a deferred, discarded `Close` on the extraction write path.
+That one mattered: on some filesystems a write error surfaces only at `Close`,
+and reporting a file as extracted when its bytes never landed is exactly the
+silent corruption this project exists to rule out. It is now checked and
+propagated.
+
+### Deviation
+
+The test files were committed alongside their implementation rather than as
+separate `test(cli)` commits, because the staging pattern used swept them in.
+The tests are present and covered by the gate; only the commit decomposition
+is coarser than intended.
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+=== GATE: cargo fmt --check ===         PASS
+=== GATE: cargo clippy -D warnings ===  PASS
+=== GATE: cargo test ===                PASS
+=== GATE: cargo audit ===               PASS
+=== GATE: cargo deny ===                PASS
+=== GATE: ABI drift ===                 PASS
+=== GATE: build rust core for cgo ===   PASS
+=== GATE: go vet ===                    PASS
+=== GATE: go test -race ===             PASS
+=== GATE: go build ===                  PASS
+=== GATE: golangci-lint ===             PASS
+=== GATE: govulncheck ===               PASS
+
+=== GATE SUMMARY ===
+  Passed: 12
+  Failed: 0
+ALL GATES PASSED
+```
+
+
 ## Phase 19 - Go bindings
 
 **Objective:** Wrap the C ABI in a Go-idiomatic package so the CLI has
