@@ -1,8 +1,8 @@
 //! Tests for the session header wire format module.
 
 use crate::session::{
-    SessionHeader, SessionParams, RaptorQParams, SESSION_HEADER_SIZE, SESSION_MAGIC,
-    SESSION_VERSION, verify_payload_digest,
+    RaptorQParams, SESSION_HEADER_SIZE, SESSION_MAGIC, SESSION_VERSION, SessionHeader,
+    SessionParams, verify_payload_digest,
 };
 use proptest::prelude::*;
 
@@ -42,7 +42,7 @@ fn test_session_header_to_vec_size() {
 fn test_session_header_from_bytes_round_trip() {
     let session_id = [0x55; 16];
     let params = test_params();
-    let header = SessionHeader::new(session_id, params.clone());
+    let header = SessionHeader::new(session_id, params);
     let bytes = header.to_vec();
     let parsed = SessionHeader::from_bytes(&bytes).unwrap();
     assert_eq!(parsed.magic(), header.magic());
@@ -145,23 +145,23 @@ fn test_session_params_validation_zero_symbol_size() {
     assert!(params.validate().is_err());
 }
 
-    #[test]
-    fn test_raptorq_params_equality() {
-        let p1 = RaptorQParams { z: 1, n: 2, psi: 3 };
-        let p2 = RaptorQParams { z: 1, n: 2, psi: 3 };
-        let p3 = RaptorQParams { z: 1, n: 2, psi: 4 };
-        assert_eq!(p1, p2);
-        assert_ne!(p1, p3);
-    }
+#[test]
+fn test_raptorq_params_equality() {
+    let p1 = RaptorQParams { z: 1, n: 2, psi: 3 };
+    let p2 = RaptorQParams { z: 1, n: 2, psi: 3 };
+    let p3 = RaptorQParams { z: 1, n: 2, psi: 4 };
+    assert_eq!(p1, p2);
+    assert_ne!(p1, p3);
+}
 
-    #[test]
-    fn test_session_params_equality() {
-        let p1 = test_params();
-        let mut p2 = test_params();
-        assert_eq!(p1, p2);
-        p2.block_count = 99;
-        assert_ne!(p1, p2);
-    }
+#[test]
+fn test_session_params_equality() {
+    let p1 = test_params();
+    let mut p2 = test_params();
+    assert_eq!(p1, p2);
+    p2.block_count = 99;
+    assert_ne!(p1, p2);
+}
 
 #[test]
 fn test_session_params_accessors() {

@@ -54,9 +54,9 @@
 //! assert_eq!(parsed.params(), header.params());
 //! ```
 
+use crate::SessionError;
 use crate::blake3::blake3_digest;
 use crate::crc32c::crc32c_digest;
-use crate::SessionError;
 
 /// Magic bytes for Dhow session headers (ASCII "DSES").
 pub const SESSION_MAGIC: [u8; 4] = *b"DSES";
@@ -117,8 +117,7 @@ impl SessionParams {
         }
         if self.total_symbols_per_block < self.source_symbols_per_block {
             return Err(SessionError::InvalidParameters {
-                details: "total_symbols_per_block must be >= source_symbols_per_block"
-                    .to_string(),
+                details: "total_symbols_per_block must be >= source_symbols_per_block".to_string(),
             });
         }
         Ok(())
@@ -139,10 +138,7 @@ pub struct SessionHeader {
 
 impl SessionHeader {
     /// Creates a new session header.
-    pub fn new(
-        session_id: [u8; 16],
-        params: SessionParams,
-    ) -> Self {
+    pub fn new(session_id: [u8; 16], params: SessionParams) -> Self {
         // Build the bytes to compute CRC over
         let mut bytes = Vec::with_capacity(SESSION_HEADER_SIZE - 4);
         bytes.push(SESSION_VERSION);
@@ -278,12 +274,22 @@ impl SessionHeader {
         })
     }
 
-    pub fn magic(&self) -> [u8; 4] { self.magic }
-    pub fn version(&self) -> u8 { self.version }
-    pub fn session_id(&self) -> [u8; 16] { self.session_id }
-    pub fn params(&self) -> &SessionParams { &self.params }
+    pub fn magic(&self) -> [u8; 4] {
+        self.magic
+    }
+    pub fn version(&self) -> u8 {
+        self.version
+    }
+    pub fn session_id(&self) -> [u8; 16] {
+        self.session_id
+    }
+    pub fn params(&self) -> &SessionParams {
+        &self.params
+    }
     /// Returns the CRC32C checksum of the session header.
-    pub fn crc32c(&self) -> u32 { self.crc32c }
+    pub fn crc32c(&self) -> u32 {
+        self.crc32c
+    }
 
     /// Returns the payload digest for verification.
     pub fn payload_digest(&self) -> [u8; 32] {
