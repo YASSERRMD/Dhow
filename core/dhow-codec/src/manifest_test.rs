@@ -82,6 +82,32 @@ fn test_file_entry_null_byte() {
 }
 
 #[test]
+fn test_file_entry_leading_slash() {
+    let entry = FileEntry::new("/etc/passwd", 0, [0; 32]);
+    let bytes = entry.to_vec();
+    let result = FileEntry::from_bytes(&bytes);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_file_entry_parent_dir() {
+    let entry = FileEntry::new("../secret", 0, [0; 32]);
+    let bytes = entry.to_vec();
+    let result = FileEntry::from_bytes(&bytes);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_manifest_header_unsupported_version() {
+    let entries = make_entries();
+    let header = ManifestHeader::new([0; 16], &entries, 15);
+    let mut bytes = header.to_vec();
+    bytes[4] = 99;
+    let result = ManifestHeader::from_bytes(&bytes);
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_manifest_header_from_bytes_round_trip() {
     let entries = make_entries();
     let header = ManifestHeader::new([0x55; 16], &entries, 15);

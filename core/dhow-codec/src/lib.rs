@@ -327,6 +327,7 @@ mod tests {
     }
 
     #[test]
+    fn test_session_error_display() {
         let err = SessionError::NotInitialized;
         assert!(err.to_string().contains("not initialized"));
     }
