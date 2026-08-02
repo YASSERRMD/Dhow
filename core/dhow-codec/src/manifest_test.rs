@@ -1,10 +1,7 @@
 //! Tests for the manifest wire format module.
 
-use crate::manifest::{FileEntry, Manifest, ManifestHeader, MANIFEST_MAGIC, MANIFEST_VERSION};
+use crate::manifest::{FileEntry, MANIFEST_MAGIC, MANIFEST_VERSION, Manifest, ManifestHeader};
 
-fn test_digest() -> [u8; 32] {
-    [0xAB; 32]
-}
 
 fn test_signature() -> [u8; 64] {
     [0xCD; 64]
