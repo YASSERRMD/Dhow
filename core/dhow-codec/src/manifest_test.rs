@@ -87,6 +87,16 @@ fn test_file_entry_leading_slash() {
 }
 
 #[test]
+fn test_file_entry_empty_name() {
+    let entry = FileEntry::new("", 0, [0; 32]);
+    let bytes = entry.to_vec();
+    let result = FileEntry::from_bytes(&bytes);
+    // Empty name is not path traversal, so should succeed
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().0.name, "");
+}
+
+#[test]
 fn test_file_entry_parent_dir() {
     let entry = FileEntry::new("../secret", 0, [0; 32]);
     let bytes = entry.to_vec();
