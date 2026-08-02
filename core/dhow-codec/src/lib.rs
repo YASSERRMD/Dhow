@@ -12,16 +12,16 @@ pub mod fec;
 #[cfg(test)]
 mod fec_test;
 pub mod frame;
-pub mod manifest;
 #[cfg(test)]
 mod frame_test;
 #[cfg(test)]
 mod integrity_test;
+pub mod manifest;
+#[cfg(test)]
+mod manifest_test;
 pub mod session;
 #[cfg(test)]
 mod session_test;
-#[cfg(test)]
-mod manifest_test;
 
 use thiserror::Error;
 
@@ -303,7 +303,9 @@ mod tests {
 
     #[test]
     fn test_manifest_error_display() {
-        let err = ManifestError::PathTraversal { name: "test".into() };
+        let err = ManifestError::PathTraversal {
+            name: "test".into(),
+        };
         assert!(err.to_string().contains("path traversal"));
     }
 
@@ -316,7 +318,7 @@ mod tests {
     #[test]
     fn test_manifest_error_invalid_magic() {
         let err = ManifestError::InvalidMagic { got: [0, 0, 0, 0] };
-        assert!(err.to_string().contains("invalid magic"));
+        assert!(err.to_string().contains("manifest magic"));
     }
 
     #[test]
