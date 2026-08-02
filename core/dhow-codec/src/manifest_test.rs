@@ -87,12 +87,53 @@ fn test_file_entry_leading_slash() {
 
 #[test]
 fn test_file_entry_empty_name() {
+    // An empty name names no file and cannot be extracted to anything, so it
+    // is a malformed entry rather than a harmless one. This previously parsed
+    // successfully; the name policy now rejects it.
     let entry = FileEntry::new("", 0, [0; 32]);
     let bytes = entry.to_vec();
-    let result = FileEntry::from_bytes(&bytes);
-    // Empty name is not path traversal, so should succeed
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap().0.name, "");
+    assert!(FileEntry::from_bytes(&bytes).is_err());
+}
+
+#[test]
+fn test_file_entry_rejects_traversal_in_any_component() {
+    // A name whose first component is harmless still escapes if a later
+    // component is `..`. Checking only the start of the string missed these.
+    for name in [
+        "a/../../etc/passwd",
+        "docs/../../../root/.ssh/id_ed25519",
+        "a/b/..",
+        "a/../b",
+        "./../x",
+    ] {
+        let bytes = FileEntry::new(name, 0, [0; 32]).to_vec();
+        assert!(
+            FileEntry::from_bytes(&bytes).is_err(),
+            "traversal name {name:?} was accepted"
+        );
+    }
+}
+
+#[test]
+fn test_file_entry_rejects_absolute_and_drive_paths() {
+    for name in ["/etc/passwd", "/", "C:/Windows/System32", "C:evil"] {
+        let bytes = FileEntry::new(name, 0, [0; 32]).to_vec();
+        assert!(
+            FileEntry::from_bytes(&bytes).is_err(),
+            "absolute name {name:?} was accepted"
+        );
+    }
+}
+
+#[test]
+fn test_file_entry_accepts_ordinary_relative_names() {
+    for name in ["a.txt", "dir/a.txt", "a/b/c/d.bin", "..hidden", "a..b"] {
+        let bytes = FileEntry::new(name, 7, [1; 32]).to_vec();
+        assert!(
+            FileEntry::from_bytes(&bytes).is_ok(),
+            "legitimate name {name:?} was rejected"
+        );
+    }
 }
 
 #[test]
