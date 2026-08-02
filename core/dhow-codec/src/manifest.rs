@@ -32,13 +32,18 @@
 //! ## Integrity
 //!
 //! - **CRC32C**: Covers bytes 0..100 (magic through reserved2).
-//! - **Ed25519 Signature**: Covers bytes 0..100, verified by the operator's key.
+//! - **Ed25519 Signature**: Covers the entire manifest, file entries included,
+//!   with the signature field itself zeroed. See [`Manifest::signing_bytes`].
+//!   A signature over the fixed header alone would leave every file name, size,
+//!   and digest unauthenticated.
 //! - **Payload Digest**: BLAKE3 of the encrypted payload, for end-to-end verification.
 //!
 //! ## Safety
 //!
-//! File names are sanitized against path traversal attacks:
-//! no leading `/`, no `..`, no null bytes, max length 4096.
+//! File names are sanitized against path traversal by [`validate_name`], which
+//! inspects every `/`-separated component rather than only the start of the
+//! string. Rejected: empty names, absolute paths, Windows drive prefixes,
+//! backslashes, NUL bytes, any `..` component, and names over 4096 bytes.
 //!
 //! # Example
 //!
@@ -72,6 +77,63 @@ pub const SIGNATURE_LEN: usize = 64;
 
 /// Maximum file name length.
 pub const MAX_NAME_LEN: usize = 4096;
+
+/// Maximum number of file entries a manifest may declare.
+///
+/// The declared count drives an allocation during parsing, so it is bounded
+/// before it is trusted. Without this a manifest could claim `u32::MAX` entries
+/// and exhaust memory before a single entry was read.
+pub const MAX_FILE_COUNT: u32 = 1_000_000;
+
+/// Offset of the signature field within the fixed header.
+pub const SIGNATURE_OFFSET: usize = 104;
+
+/// Rejects a file name that could escape the extraction directory.
+///
+/// The name is treated as a relative path with `/` separators. A name is
+/// rejected when it is empty, absolute, contains a NUL, contains a `..`
+/// component anywhere, carries a Windows drive prefix, or uses a backslash.
+///
+/// Checking only the start of the string is not enough: `a/../../etc/passwd`
+/// begins with a harmless component and still escapes. Every component is
+/// inspected.
+pub fn validate_name(name: &str) -> Result<(), ManifestError> {
+    if name.is_empty() {
+        return Err(ManifestError::PathTraversal {
+            name: name.to_string(),
+        });
+    }
+
+    if name.len() > MAX_NAME_LEN {
+        return Err(ManifestError::FileNameTooLong { length: name.len() });
+    }
+
+    // A backslash is a separator on the receiving side if it is Windows, and
+    // is a legal filename character on Unix. Treating it as data would let a
+    // name that looks like one component become two. Reject it outright.
+    if name.contains('\0') || name.contains('\\') {
+        return Err(ManifestError::PathTraversal {
+            name: name.to_string(),
+        });
+    }
+
+    // Absolute paths, and drive-relative names such as `C:file`.
+    if name.starts_with('/') || name.chars().nth(1) == Some(':') {
+        return Err(ManifestError::PathTraversal {
+            name: name.to_string(),
+        });
+    }
+
+    for component in name.split('/') {
+        if component == ".." {
+            return Err(ManifestError::PathTraversal {
+                name: name.to_string(),
+            });
+        }
+    }
+
+    Ok(())
+}
 
 /// A file entry within the manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,10 +196,7 @@ impl FileEntry {
                 details: "file name contains invalid UTF-8".to_string(),
             })?;
 
-        // Path traversal check
-        if name.starts_with('/') || name.starts_with("..") || name.contains('\0') {
-            return Err(ManifestError::PathTraversal { name: name.clone() });
-        }
+        validate_name(&name)?;
 
         let size = u64::from_le_bytes(bytes[2 + name_len..10 + name_len].try_into().unwrap());
 
@@ -350,11 +409,28 @@ impl Manifest {
     }
 
     /// Parses a manifest from bytes.
+    ///
+    /// The declared file count is bounded before it is used to size an
+    /// allocation, so a hostile manifest cannot exhaust memory by claiming
+    /// more entries than it carries.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ManifestError> {
         let header = ManifestHeader::from_bytes(bytes)?;
+
+        if header.file_count() > MAX_FILE_COUNT {
+            return Err(ManifestError::InvalidFileCount {
+                count: header.file_count(),
+            });
+        }
+
         let file_count = header.file_count() as usize;
 
-        let mut entries = Vec::with_capacity(file_count);
+        // Reserve against what the buffer could actually hold rather than what
+        // the header claims, so the claim alone drives no allocation.
+        let min_entry_len = 2 + 8 + 32;
+        let capacity =
+            file_count.min(bytes.len().saturating_sub(MANIFEST_HEADER_SIZE) / min_entry_len + 1);
+
+        let mut entries = Vec::with_capacity(capacity);
         let mut offset = MANIFEST_HEADER_SIZE;
         for _ in 0..file_count {
             if offset >= bytes.len() {
@@ -376,5 +452,38 @@ impl Manifest {
     }
     pub fn entries(&self) -> &[FileEntry] {
         &self.entries
+    }
+
+    /// Returns the canonical byte string an Ed25519 signature covers.
+    ///
+    /// This is the entire manifest, file entries included, with the 64-byte
+    /// signature field itself zeroed. Signing the whole structure is the point:
+    /// a signature over the fixed header alone would leave every file name,
+    /// size, and digest unauthenticated, so an attacker could rewrite an entry
+    /// to a traversal path and the signature would still verify.
+    ///
+    /// Zeroing the signature field rather than excluding its range keeps the
+    /// offsets of everything after it unchanged, so signer and verifier build
+    /// the same bytes without either needing to splice ranges.
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        let mut bytes = self.to_vec();
+        bytes[SIGNATURE_OFFSET..MANIFEST_HEADER_SIZE].fill(0);
+        bytes
+    }
+
+    /// Returns the canonical signing bytes for an already-serialized manifest.
+    ///
+    /// Used by a verifier, which holds bytes off the wire rather than a parsed
+    /// manifest it built itself.
+    pub fn signing_bytes_of(bytes: &[u8]) -> Result<Vec<u8>, ManifestError> {
+        if bytes.len() < MANIFEST_HEADER_SIZE {
+            return Err(ManifestError::Truncated {
+                expected: MANIFEST_HEADER_SIZE,
+                actual: bytes.len(),
+            });
+        }
+        let mut owned = bytes.to_vec();
+        owned[SIGNATURE_OFFSET..MANIFEST_HEADER_SIZE].fill(0);
+        Ok(owned)
     }
 }
