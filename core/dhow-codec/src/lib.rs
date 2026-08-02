@@ -20,6 +20,8 @@ pub mod manifest;
 #[cfg(test)]
 mod manifest_test;
 pub mod pipeline;
+#[cfg(test)]
+mod pipeline_test;
 pub mod qr;
 #[cfg(test)]
 mod qr_test;
@@ -29,8 +31,6 @@ mod resume_test;
 pub mod session;
 #[cfg(test)]
 mod session_test;
-#[cfg(test)]
-mod pipeline_test;
 
 use thiserror::Error;
 
