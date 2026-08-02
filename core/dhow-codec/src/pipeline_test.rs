@@ -1,0 +1,472 @@
+//! Tests for the frame assembly and reassembly pipeline.
+
+use crate::blake3::blake3_digest;
+use crate::frame::{FRAME_HEADER_SIZE, FrameType};
+use crate::pipeline::{FrameOutcome, Pipeline, PipelineDecoder};
+use crate::session::{RaptorQParams, SessionParams};
+use crate::{CodecError, FrameError, SessionError};
+
+const KEY: [u8; 32] = [0xAB; 32];
+const SESSION: [u8; 16] = [0x42; 16];
+
+/// Builds session parameters matching `payload`, with the given block count
+/// and repair overhead.
+fn params_for(payload: &[u8], block_count: u32, repair: u32) -> SessionParams {
+    let symbol_size = 64u32;
+    // Symbols in the largest block, which is what the repair budget is sized against.
+    let largest_block = (payload.len() as u64).div_ceil(block_count as u64);
+    let source = largest_block.div_ceil(symbol_size as u64).max(1) as u32;
+    SessionParams {
+        payload_size: payload.len() as u64,
+        block_count,
+        symbol_size,
+        source_symbols_per_block: source,
+        total_symbols_per_block: source + repair,
+        raptorq: RaptorQParams { z: 1, n: 1, psi: 1 },
+        payload_digest: blake3_digest(payload),
+    }
+}
+
+fn payload_of(len: usize) -> Vec<u8> {
+    (0..len).map(|i| (i % 251) as u8).collect()
+}
+
+/// Drives a full send -> receive cycle, feeding `frames` in the given order.
+fn round_trip(payload: &[u8], params: SessionParams, frames: Vec<Vec<u8>>) -> Vec<u8> {
+    let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+    for frame in &frames {
+        decoder.accept(frame).unwrap();
+    }
+    assert!(decoder.is_complete(), "decoder did not complete");
+    let out = decoder.finish().unwrap();
+    assert_eq!(out, payload);
+    out
+}
+
+#[test]
+fn test_round_trip_single_block() {
+    let payload = b"Hello, Dhow!".to_vec();
+    let params = params_for(&payload, 1, 4);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+    round_trip(&payload, params, frames);
+}
+
+#[test]
+fn test_round_trip_multiple_blocks() {
+    let payload = payload_of(4096);
+    let params = params_for(&payload, 4, 8);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+    round_trip(&payload, params, frames);
+}
+
+#[test]
+fn test_round_trip_payload_smaller_than_one_symbol() {
+    let payload = b"x".to_vec();
+    let params = params_for(&payload, 1, 2);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+    round_trip(&payload, params, frames);
+}
+
+#[test]
+fn test_round_trip_payload_exact_symbol_multiple() {
+    let payload = payload_of(64 * 8);
+    let params = params_for(&payload, 1, 4);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+    round_trip(&payload, params, frames);
+}
+
+#[test]
+fn test_round_trip_frames_reversed() {
+    let payload = payload_of(2048);
+    let params = params_for(&payload, 2, 6);
+    let mut frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+    frames.reverse();
+    round_trip(&payload, params, frames);
+}
+
+#[test]
+fn test_round_trip_with_duplicated_frames() {
+    let payload = payload_of(1024);
+    let params = params_for(&payload, 1, 4);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+    let doubled: Vec<Vec<u8>> = frames.iter().flat_map(|f| [f.clone(), f.clone()]).collect();
+    round_trip(&payload, params, doubled);
+}
+
+#[test]
+fn test_decode_recovers_from_dropped_source_symbols() {
+    let payload = payload_of(2048);
+    // Generous repair budget so dropping source symbols is still recoverable.
+    let params = params_for(&payload, 1, 32);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+
+    // Drop every third frame, simulating missed captures.
+    let surviving: Vec<Vec<u8>> = frames
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| i % 3 != 0)
+        .map(|(_, f)| f)
+        .collect();
+
+    let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+    for frame in &surviving {
+        decoder.accept(frame).unwrap();
+    }
+    assert!(decoder.is_complete());
+    assert_eq!(decoder.finish().unwrap(), payload);
+}
+
+#[test]
+fn test_encode_emits_each_symbol_index_once_per_block() {
+    let payload = payload_of(512);
+    let params = params_for(&payload, 2, 3);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode(&payload)
+        .unwrap();
+
+    let mut seen = std::collections::HashSet::new();
+    for prepared in &frames {
+        let h = prepared.frame.header();
+        assert!(
+            seen.insert((h.block_index(), h.symbol_index())),
+            "duplicate (block, symbol) pair emitted: ({}, {})",
+            h.block_index(),
+            h.symbol_index()
+        );
+    }
+}
+
+#[test]
+fn test_encode_frames_carry_payload_id_and_symbol() {
+    let payload = payload_of(256);
+    let params = params_for(&payload, 1, 1);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode(&payload)
+        .unwrap();
+
+    for prepared in &frames {
+        // 4-byte PayloadId plus at least one byte of symbol data.
+        assert!(prepared.frame.payload().len() > 4);
+        assert_eq!(prepared.frame.header().frame_type(), FrameType::Repair);
+        assert_eq!(prepared.frame.header().session_id(), SESSION);
+    }
+}
+
+#[test]
+fn test_encode_is_deterministic() {
+    let payload = payload_of(1024);
+    let params = params_for(&payload, 2, 4);
+    let pipeline = Pipeline::new(SESSION, params, KEY).unwrap();
+    assert_eq!(
+        pipeline.encode_to_bytes(&payload).unwrap(),
+        pipeline.encode_to_bytes(&payload).unwrap()
+    );
+}
+
+#[test]
+fn test_encode_rejects_payload_size_mismatch() {
+    let payload = payload_of(100);
+    let params = params_for(&payload, 1, 2);
+    let pipeline = Pipeline::new(SESSION, params, KEY).unwrap();
+    assert!(matches!(
+        pipeline.encode(b"short"),
+        Err(CodecError::Session(SessionError::InvalidParameters { .. }))
+    ));
+}
+
+#[test]
+fn test_new_rejects_symbol_size_below_fec_minimum() {
+    let payload = payload_of(128);
+    let mut params = params_for(&payload, 1, 2);
+    params.symbol_size = 32;
+    // Must be a typed error, not a panic from inside RaptorQ.
+    assert!(Pipeline::new(SESSION, params, KEY).is_err());
+    assert!(PipelineDecoder::new(SESSION, params, KEY).is_err());
+}
+
+#[test]
+fn test_new_rejects_symbol_size_that_overflows_a_frame() {
+    let payload = payload_of(128);
+    let mut params = params_for(&payload, 1, 2);
+    params.symbol_size = 65535;
+    assert!(Pipeline::new(SESSION, params, KEY).is_err());
+    assert!(PipelineDecoder::new(SESSION, params, KEY).is_err());
+}
+
+#[test]
+fn test_new_rejects_zero_block_count() {
+    let payload = payload_of(128);
+    let mut params = params_for(&payload, 1, 2);
+    params.block_count = 0;
+    assert!(Pipeline::new(SESSION, params, KEY).is_err());
+}
+
+#[test]
+fn test_decoder_rejects_frame_from_another_session() {
+    let payload = payload_of(256);
+    let params = params_for(&payload, 1, 2);
+    let frames = Pipeline::new([0x01; 16], params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+
+    let mut decoder = PipelineDecoder::new([0x02; 16], params, KEY).unwrap();
+    // The MAC binds the session id, so a foreign frame fails before its
+    // contents are ever used.
+    assert!(decoder.accept(&frames[0]).is_err());
+    assert!(!decoder.is_complete());
+}
+
+#[test]
+fn test_decoder_rejects_frame_signed_with_another_key() {
+    let payload = payload_of(256);
+    let params = params_for(&payload, 1, 2);
+    let frames = Pipeline::new(SESSION, params, [0x11; 32])
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+
+    let mut decoder = PipelineDecoder::new(SESSION, params, [0x22; 32]).unwrap();
+    assert!(matches!(
+        decoder.accept(&frames[0]),
+        Err(CodecError::Frame(FrameError::MacVerificationFailed))
+    ));
+}
+
+#[test]
+fn test_decoder_rejects_corrupted_payload() {
+    let payload = payload_of(512);
+    let params = params_for(&payload, 1, 4);
+    let mut frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+
+    // Flip a bit in the symbol data; the CRC must catch it.
+    let last = frames[0].len() - 1;
+    frames[0][last] ^= 0xFF;
+
+    let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+    assert!(matches!(
+        decoder.accept(&frames[0]),
+        Err(CodecError::Frame(FrameError::CrcMismatch { .. }))
+    ));
+}
+
+#[test]
+fn test_corrupt_frame_does_not_poison_decode() {
+    let payload = payload_of(1024);
+    let params = params_for(&payload, 1, 16);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+
+    let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+
+    // Interleave a corrupted copy of each frame with the good one.
+    for frame in &frames {
+        let mut bad = frame.clone();
+        let last = bad.len() - 1;
+        bad[last] ^= 0xFF;
+        let _ = decoder.accept(&bad);
+        decoder.accept(frame).unwrap();
+    }
+
+    assert!(decoder.is_complete());
+    assert_eq!(decoder.finish().unwrap(), payload);
+}
+
+#[test]
+fn test_decoder_rejects_truncated_frame() {
+    let payload = payload_of(256);
+    let params = params_for(&payload, 1, 2);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+
+    let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+    for cut in [0, 1, FRAME_HEADER_SIZE - 1, FRAME_HEADER_SIZE + 1] {
+        assert!(
+            decoder.accept(&frames[0][..cut]).is_err(),
+            "truncation to {cut} bytes was accepted"
+        );
+    }
+}
+
+#[test]
+fn test_decoder_rejects_every_single_byte_mutation_of_a_frame() {
+    let payload = payload_of(128);
+    let params = params_for(&payload, 1, 1);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+    let good = &frames[0];
+
+    for i in 0..good.len() {
+        let mut mutated = good.clone();
+        mutated[i] ^= 0x01;
+        let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+        assert!(
+            decoder.accept(&mutated).is_err(),
+            "mutation at byte {i} was accepted"
+        );
+    }
+}
+
+#[test]
+fn test_decoder_rejects_short_symbol_payload_without_panicking() {
+    // A frame whose payload is shorter than a RaptorQ PayloadId would make the
+    // library index out of bounds; the decoder must reject it first.
+    use crate::frame::{Frame, FrameHeader};
+
+    let payload = payload_of(256);
+    let params = params_for(&payload, 1, 2);
+
+    for len in 0..=4usize {
+        let symbol = vec![0u8; len];
+        let header = FrameHeader::new(FrameType::Repair, SESSION, 0, 0, &symbol);
+        let frame = Frame::build(&header, &symbol, &KEY).to_vec();
+
+        let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+        assert!(
+            decoder.accept(&frame).is_err(),
+            "a {len}-byte symbol payload was accepted"
+        );
+    }
+}
+
+#[test]
+fn test_decoder_rejects_out_of_range_block_index() {
+    use crate::frame::{Frame, FrameHeader};
+
+    let payload = payload_of(256);
+    let params = params_for(&payload, 1, 2);
+
+    let symbol = vec![7u8; 32];
+    let header = FrameHeader::new(FrameType::Repair, SESSION, 999, 0, &symbol);
+    let frame = Frame::build(&header, &symbol, &KEY).to_vec();
+
+    let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+    assert!(decoder.accept(&frame).is_err());
+}
+
+#[test]
+fn test_redundant_frames_after_block_completes() {
+    let payload = payload_of(256);
+    let params = params_for(&payload, 1, 8);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+
+    let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+    let mut saw_redundant = false;
+    for frame in &frames {
+        if decoder.accept(frame).unwrap() == FrameOutcome::Redundant {
+            saw_redundant = true;
+        }
+    }
+    assert!(
+        saw_redundant,
+        "expected surplus repair symbols to report as redundant"
+    );
+    assert_eq!(decoder.finish().unwrap(), payload);
+}
+
+#[test]
+fn test_finish_refuses_before_all_blocks_decode() {
+    let payload = payload_of(4096);
+    let params = params_for(&payload, 4, 2);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+
+    let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+    // Feed only the first block's frames.
+    for frame in frames.iter().take(2) {
+        let _ = decoder.accept(frame);
+    }
+    assert!(!decoder.is_complete());
+    assert!(decoder.finish().is_err());
+}
+
+#[test]
+fn test_finish_rejects_payload_that_fails_its_digest() {
+    let payload = payload_of(512);
+    let mut params = params_for(&payload, 1, 4);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+
+    // The receiver is told to expect a different payload than what arrives.
+    params.payload_digest = [0xFF; 32];
+
+    let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+    for frame in &frames {
+        decoder.accept(frame).unwrap();
+    }
+    assert!(decoder.is_complete());
+    assert!(matches!(
+        decoder.finish(),
+        Err(CodecError::Session(SessionError::DigestMismatch))
+    ));
+}
+
+#[test]
+fn test_blocks_complete_counts_up() {
+    let payload = payload_of(4096);
+    let params = params_for(&payload, 4, 8);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+
+    let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+    assert_eq!(decoder.blocks_complete(), 0);
+    for frame in &frames {
+        decoder.accept(frame).unwrap();
+    }
+    assert_eq!(decoder.blocks_complete(), 4);
+}
+
+#[test]
+fn test_accessors_return_construction_values() {
+    let payload = payload_of(128);
+    let params = params_for(&payload, 1, 2);
+    let pipeline = Pipeline::new(SESSION, params, KEY).unwrap();
+    assert_eq!(pipeline.session_id(), SESSION);
+    assert_eq!(pipeline.params().payload_size, 128);
+    assert_eq!(pipeline.chunk_map().block_count(), 1);
+
+    let decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+    assert_eq!(decoder.session_id(), SESSION);
+    assert_eq!(decoder.params().payload_size, 128);
+}

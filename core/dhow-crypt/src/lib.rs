@@ -4,6 +4,16 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aead;
+#[cfg(test)]
+mod aead_test;
+pub mod kdf;
+#[cfg(test)]
+mod kdf_test;
+pub mod key;
+#[cfg(test)]
+mod key_test;
+
 use thiserror::Error;
 
 /// Errors that can occur during key generation and handling.

@@ -1,5 +1,442 @@
 # Phase Log
 
+## Phase 16 - Payload AEAD
+
+**Objective:** Encrypt the payload with XChaCha20-Poly1305 before chunking,
+derive the payload key and the frame session key from the operator key with
+HKDF-BLAKE3 under a per-transfer salt, and prove the crypt and codec layers
+compose into a working transfer.
+
+**Gates:** decrypt of tampered ciphertext fails; nonce and salt uniqueness
+across transfers; end-to-end transfer round trips through dropped, reordered,
+duplicated, and corrupted frames; replayed and foreign-key transfers fail
+closed.
+
+### Design notes
+
+The operator key is never used to encrypt anything. Each transfer draws a
+random 32-byte salt and derives two independent keys from it under separate
+HKDF `info` strings, so disclosing the frame MAC key does not disclose the key
+protecting the payload, and two transfers between the same operators share no
+key material.
+
+XChaCha20's 192-bit nonce is wide enough to draw at random per transfer, which
+suits a courier whose two halves never communicate and so cannot agree a
+counter. The session ID is authenticated as associated data, so a recording of
+one session fails to decrypt if replayed into another.
+
+Decryption failures are reported identically whether the key, nonce, session,
+or ciphertext was wrong. Distinguishing them would tell an attacker probing
+with modified captures which part to change next.
+
+### Defect found by the new tests
+
+The HKDF expand loop incremented its `u8` block counter after emitting the
+final block, which overflowed on a full-length derivation. Caught by the
+output-length limit test and fixed in this phase.
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+=== GATE: cargo fmt --check ===      PASS
+=== GATE: cargo clippy -D warnings === PASS
+=== GATE: cargo test ===             PASS
+=== GATE: cargo audit ===            PASS
+=== GATE: cargo deny ===             PASS
+=== GATE: go vet ===                 PASS
+=== GATE: go build ===               PASS
+=== GATE: golangci-lint ===          PASS
+=== GATE: govulncheck ===            PASS
+
+=== GATE SUMMARY ===
+  Passed: 9
+  Failed: 0
+ALL GATES PASSED
+```
+
+```
+$ cargo test -p dhow-crypt
+test result: ok. 79 passed; 0 failed   (unit)
+test result: ok. 11 passed; 0 failed   (tests/end_to_end.rs)
+```
+
+## Phase 15 - Key generation and storage
+
+**Objective:** Give `dhow-crypt` the key handling it had only declared errors
+for: Ed25519 identity keypairs for manifest signing, a symmetric operator key
+that per-transfer keys derive from, a versioned and checksummed key file
+format, owner-only permission enforcement, and zeroization on drop.
+
+**Gates:** key file round trips; permission test; every single-byte mutation of
+a key file is rejected; secrets do not appear in `Debug` output.
+
+### Notes
+
+`VerifyingKey::from_bytes` does not reject every arbitrary 32-byte string. An
+all-ones encoding decompresses to a valid curve point, so the negative test
+uses encodings whose implied x-squared is not a quadratic residue.
+
+Secret key files are created with mode 0600 through `OpenOptions::mode` rather
+than chmodded after writing, so they are never briefly readable by other users.
+Loading rejects any file carrying group or other permission bits.
+
+### Gate output
+
+```
+$ cargo test -p dhow-crypt
+running 42 tests
+test result: ok. 42 passed; 0 failed; 0 ignored
+```
+
+```
+$ cargo clippy --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s)
+```
+
+## Phase 14 - Session state machine and receive pipeline
+
+**Objective:** Add the session state machine that tracks a transfer through
+initialization, active transfer, FEC recovery, pause, completion, and failure;
+and complete the frame pipeline with the receive half, so a payload encoded
+into frames can be reassembled and verified rather than only produced.
+
+**Gates:** state machine rejects every invalid transition and both terminal
+states are absorbing; pipeline round-trips payloads through reordered,
+duplicated, and dropped frames; every single-byte mutation of a valid frame is
+rejected; reassembled payloads are verified against the session digest.
+
+### Defects fixed from earlier phases
+
+Phase 13 shipped a pipeline that could not be decoded by any receiver. Three
+defects were found and fixed here, each as a `fix(codec)` commit:
+
+1. Frame payloads carried `packet.data()`, discarding the 4-byte RaptorQ
+   `PayloadId`. Without it a symbol cannot be placed within its block, so
+   decoding was impossible. Frames now carry the serialized `EncodingPacket`.
+2. `EncoderWrapper::repair_packets` returned source *and* repair symbols
+   because `get_encoded_packets` includes the source prefix. The pipeline
+   combined it with `source_packets`, emitting every source symbol twice under
+   wrong symbol indices.
+3. `FecParams::with_mtu` asserts on a symbol size below 64, and `symbol_size`
+   was truncated from `u32` to `u16` at the call site, so some session
+   parameters panicked on the data path. Symbol size is now range-checked into
+   a typed error.
+
+A fourth defect was found in the new receive path before it shipped:
+`EncodingPacket::deserialize` indexes its first four bytes unchecked, so a
+frame carrying a shorter payload would panic. The decoder rejects such frames
+with a typed error, and a test covers payload lengths 0 through 4.
+
+Phase 13's pipeline tests asserted only that `encode` returned `Ok` and a
+non-empty vector, which is why the defects above survived the phase. They are
+replaced with round-trip and adversarial tests.
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+=== GATE: cargo fmt --check ===      PASS
+=== GATE: cargo clippy -D warnings === PASS
+=== GATE: cargo test ===             PASS
+=== GATE: cargo audit ===            PASS
+=== GATE: cargo deny ===             PASS
+=== GATE: go vet ===                 PASS
+=== GATE: go build ===               PASS
+=== GATE: golangci-lint ===          PASS
+=== GATE: govulncheck ===            PASS
+
+=== GATE SUMMARY ===
+  Passed: 9
+  Failed: 0
+ALL GATES PASSED
+```
+
+```
+$ cargo test --all
+test result: ok. 236 passed; 0 failed (dhow-codec)
+test result: ok. 8 passed; 0 failed (dhow-crypt)
+test result: ok. 0 passed; 0 failed (dhow-ffi)
+test result: ok. 12 passed; 0 failed (doc-tests)
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+7
+```
+
+This phase is below the 20-commit floor in section 5.2. Honest decomposition of
+a state machine plus one pipeline module did not yield twenty self-contained
+changes, and section 8 forbids padding to reach the floor. Recorded as a
+deviation rather than met with filler commits.
+
+### Known gaps entering Phase 15
+
+An audit of the tree against the phase pack found that the following are
+declared but not implemented, and are not covered by any phase log entry:
+
+- `dhow-crypt` contains only error enums. No key generation, no AEAD, no
+  signing, no manifest verification.
+- `dhow-ffi` is an empty crate with no `extern "C"` surface and no header.
+- `cli/cmd/dhow/main.go` is `func main() {}`. There is no command surface,
+  no QR rendering, no camera capture.
+- `manifest.rs` lives in `dhow-codec` and is unsigned; the signed manifest the
+  threat model depends on does not exist yet.
+
+## Phase 13 - Frame pipeline
+
+**Objective:** Assemble frame pipeline that combines chunking, FEC encoding,
+and frame header construction into a single pipeline.
+
+**Gates:** encode produces frames with correct structure; multiple blocks work;
+wrong payload size rejected; proptest on small data.
+
+### Gate output
+
+#### Rust tests
+
+```
+$ cargo test -p dhow-codec --lib pipeline_test
+running 7 tests
+test result: ok. 7 passed; 0 failed; 0 ignored
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+4
+```
+
+## Phase 12 - QR encode/decode
+
+**Objective:** QR code encoding and terminal rendering. Encode frame bytes as QR
+codes, render to terminal for inspection, support medium error correction.
+
+**Gates:** QR encodes arbitrary binary data; terminal rendering produces
+correct dimensions; proptest on small data ranges.
+
+### Gate output
+
+#### Rust tests
+
+```
+$ cargo test -p dhow-codec --lib qr_test
+running 12 tests
+test result: ok. 12 passed; 0 failed; 0 ignored
+```
+
+#### Clippy
+
+```
+$ cargo clippy -p dhow-codec -D warnings
+    Finished `dev` profile
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+21
+```
+
+### Gate output
+
+#### Rust tests
+
+```
+$ cargo test -p dhow-codec --lib session_test
+running 13 tests
+test result: ok. 13 passed; 0 failed; 0 ignored
+```
+
+#### Clippy
+
+```
+$ cargo clippy -p dhow-codec -D warnings
+    Finished `dev` profile
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+14
+```
+
+### Gate output
+
+#### Rust tests
+
+```
+$ cargo test -p dhow-codec --lib manifest_test
+running 18 tests
+test result: ok. 18 passed; 0 failed; 0 ignored
+```
+
+#### Clippy
+
+```
+$ cargo clippy -p dhow-codec -D warnings
+    Finished `dev` profile
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+16
+```
+
+### Gate output
+
+#### Rust tests
+
+```
+$ cargo test -p dhow-codec --lib manifest_test
+running 20 tests
+test result: ok. 20 passed; 0 failed; 0 ignored
+```
+
+#### Clippy
+
+```
+$ cargo clippy -p dhow-codec -D warnings
+    Finished `dev` profile
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+16
+```
+
+### Gate output
+
+#### Rust tests
+
+```
+$ cargo test -p dhow-codec --lib resume_test
+running 23 tests
+test result: ok. 23 passed; 0 failed; 0 ignored
+```
+
+#### Clippy
+
+```
+$ cargo clippy -p dhow-codec -D warnings
+    Finished `dev` profile
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+16
+```
+
+## Phase 8 - Frame wire format
+
+**Objective:** Binary frame header and payload wire format per `proto/frame.md`.
+Serialize/deserialize frame headers; compute truncated HMAC-BLAKE3 MAC and
+CRC32C checksum; validate magic, version, and integrity.
+
+**Gates:** round-trip identity (serialize -> deserialize recovers original);
+MAC verification with correct and wrong key; CRC32C mismatch detection;
+invalid magic and version rejection; proptest on arbitrary payloads.
+
+### Gate output
+
+#### Rust tests
+
+```
+$ cargo test -p dhow-codec --lib frame_test
+running 16 tests
+test result: ok. 16 passed; 0 failed; 0 ignored
+```
+
+#### Clippy
+
+```
+$ cargo clippy -p dhow-codec -D warnings
+    Finished `dev` profile
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+14
+```
+
+## Phase 7 - FEC (RaptorQ)
+
+**Objective:** RaptorQ (RFC 6330) encoding and decoding wrappers for
+fault-tolerant payload transmission. Generate source and repair symbols;
+decode from any sufficient subset.
+
+**Gates:** round-trip identity (encode -> decode recovers original);
+decode from source packets only; decode from repair packets only;
+known-answer test against RFC 6330 vectors.
+
+### Planned atomic commits
+
+1. `docs: add phase-log.md with Phase 7 objective`
+2. `chore: add raptorq dependency`
+3. `feat(codec): add raptorq module skeleton`
+4. `feat(codec): add FecParams struct`
+5. `feat(codec): add encode function`
+6. `feat(codec): add repair packet generation`
+7. `feat(codec): add decode function`
+8. `feat(codec): add FecError error variant`
+9. `test(codec): add encode-decode round-trip test`
+10. `test(codec): add source-only decode test`
+11. `test(codec): add repair-only decode test`
+12. `test(codec): add known-answer test against RFC 6330`
+13. `test(codec): add proptest for round-trip property`
+14. `docs(codec): document raptorq module`
+15. `chore: verify FEC gates pass`
+
+### Gate output
+
+#### Rust tests
+
+```
+$ cargo test -p dhow-codec --lib fec_test
+running 12 tests
+test result: ok. 12 passed; 0 failed; 0 ignored
+```
+
+#### Clippy
+
+```
+$ cargo clippy -p dhow-codec -D warnings
+    Finished `dev` profile
+```
+
+#### Round-trip property tests (proptest)
+
+- `prop_fec_round_trip`: round-trip identity on arbitrary payloads (1 to 10,000 bytes)
+
+#### Edge case tests
+
+- Empty payloads (skip - raptorq panics on 0-length)
+- Single byte payload
+- 100K byte payload
+- 30% simulated packet loss recovery
+- Custom MTU (512)
+- MTU below minimum (64) panics as expected
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+21
+```
+
 ## Phase 6 - Integrity primitives
 
 **Objective:** CRC32C and BLAKE3 wrappers with streaming interfaces; per-block

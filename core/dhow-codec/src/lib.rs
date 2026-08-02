@@ -8,8 +8,32 @@
 pub mod blake3;
 pub mod chunker;
 pub mod crc32c;
+pub mod fec;
+#[cfg(test)]
+mod fec_test;
+pub mod frame;
+#[cfg(test)]
+mod frame_test;
 #[cfg(test)]
 mod integrity_test;
+pub mod manifest;
+#[cfg(test)]
+mod manifest_test;
+pub mod pipeline;
+#[cfg(test)]
+mod pipeline_test;
+pub mod qr;
+#[cfg(test)]
+mod qr_test;
+pub mod resume;
+#[cfg(test)]
+mod resume_test;
+pub mod session;
+pub mod session_state;
+#[cfg(test)]
+mod session_state_test;
+#[cfg(test)]
+mod session_test;
 
 use thiserror::Error;
 
@@ -86,6 +110,10 @@ pub enum FrameError {
     /// The frame header is too short.
     #[error("frame header too short: {length} bytes (minimum 46)")]
     HeaderTooShort { length: usize },
+
+    /// The reserved field is non-zero.
+    #[error("reserved field must be zero, got {value}")]
+    ReservedFieldNonZero { value: u16 },
 }
 
 /// Errors that can occur during session operations.
@@ -140,6 +168,74 @@ pub enum ResumeError {
     InvalidSymbolCount { count: u32 },
 }
 
+/// Errors that can occur during manifest operations.
+#[derive(Debug, Error)]
+pub enum ManifestError {
+    /// The manifest has invalid magic bytes.
+    #[error("invalid manifest magic: expected DHMF, got {got:?}")]
+    InvalidMagic { got: [u8; 4] },
+
+    /// The manifest version is not supported.
+    #[error("unsupported manifest version: {version}")]
+    UnsupportedVersion { version: u8 },
+
+    /// The manifest signature verification failed.
+    #[error("manifest signature verification failed")]
+    SignatureVerificationFailed,
+
+    /// The manifest CRC32C check failed.
+    #[error("manifest CRC mismatch")]
+    CrcMismatch,
+
+    /// The manifest is truncated.
+    #[error("manifest truncated: expected {expected} bytes, got {actual}")]
+    Truncated { expected: usize, actual: usize },
+
+    /// A file name in the manifest contains path traversal.
+    #[error("path traversal detected in file name: {name}")]
+    PathTraversal { name: String },
+
+    /// A file name in the manifest is too long.
+    #[error("file name too long: {length} bytes (max 4096)")]
+    FileNameTooLong { length: usize },
+
+    /// The manifest claims a file size that exceeds the maximum.
+    #[error("file size {size} exceeds maximum {max}")]
+    FileSizeTooLarge { size: u64, max: u64 },
+
+    /// The manifest file count is invalid.
+    #[error("invalid file count in manifest: {count}")]
+    InvalidFileCount { count: u32 },
+
+    /// The manifest session ID does not match.
+    #[error("manifest session ID mismatch")]
+    SessionMismatch,
+
+    /// The manifest signature is invalid.
+    #[error("invalid manifest signature: {details}")]
+    InvalidKey { details: String },
+}
+
+/// Errors that can occur during FEC encoding or decoding.
+#[derive(Debug, Error)]
+pub enum FecError {
+    /// The input data is too large for RaptorQ encoding.
+    #[error("payload too large for FEC encoding")]
+    PayloadTooLarge,
+
+    /// The source block size is invalid.
+    #[error("invalid source block size: {details}")]
+    InvalidSourceBlock { details: String },
+
+    /// Decoding failed (insufficient packets received).
+    #[error("decoding failed: insufficient packets")]
+    InsufficientPackets,
+
+    /// The MTU is too small.
+    #[error("MTU {mtu} is below minimum {min}")]
+    MtuTooSmall { mtu: u16, min: u16 },
+}
+
 /// Top-level error type for the codec crate.
 #[derive(Debug, Error)]
 pub enum CodecError {
@@ -151,9 +247,17 @@ pub enum CodecError {
     #[error("frame error: {0}")]
     Frame(#[from] FrameError),
 
+    /// Frame payload exceeds maximum size.
+    #[error("frame payload too large: {length} bytes (max {max}")]
+    FramePayloadTooLarge { length: usize, max: usize },
+
     /// Session error.
     #[error("session error: {0}")]
     Session(#[from] SessionError),
+
+    /// Manifest error.
+    #[error("manifest error: {0}")]
+    Manifest(#[from] ManifestError),
 
     /// Resume state error.
     #[error("resume error: {0}")]
@@ -162,6 +266,10 @@ pub enum CodecError {
     /// RaptorQ encoding/decoding error.
     #[error("raptorq error: {details}")]
     RaptorQ { details: String },
+
+    /// RaptorQ encoding/decoding error.
+    #[error("FEC error: {0}")]
+    Fec(#[from] FecError),
 
     /// An unexpected internal error.
     #[error("internal error: {details}")]
@@ -185,6 +293,54 @@ mod tests {
     }
 
     #[test]
+    fn test_frame_error_reserved_nonzero() {
+        let err = FrameError::ReservedFieldNonZero { value: 1 };
+        assert!(err.to_string().contains("must be zero"));
+    }
+
+    #[test]
+    fn test_frame_error_crc_mismatch() {
+        let err = FrameError::CrcMismatch {
+            expected: 1,
+            actual: 2,
+        };
+        assert!(err.to_string().contains("CRC32C mismatch"));
+    }
+
+    #[test]
+    fn test_frame_error_mac_verification() {
+        let err = FrameError::MacVerificationFailed;
+        assert!(err.to_string().contains("MAC verification"));
+    }
+
+    #[test]
+    fn test_manifest_error_display() {
+        let err = ManifestError::PathTraversal {
+            name: "test".into(),
+        };
+        assert!(err.to_string().contains("path traversal"));
+    }
+
+    #[test]
+    fn test_manifest_error_crc_mismatch() {
+        let err = ManifestError::CrcMismatch;
+        assert!(err.to_string().contains("CRC"));
+    }
+
+    #[test]
+    fn test_manifest_error_invalid_magic() {
+        let err = ManifestError::InvalidMagic { got: [0, 0, 0, 0] };
+        assert!(err.to_string().contains("manifest magic"));
+    }
+
+    #[test]
+    fn test_codec_error_from_manifest() {
+        let manifest_err = ManifestError::SignatureVerificationFailed;
+        let codec_err = CodecError::from(manifest_err);
+        assert!(codec_err.to_string().contains("manifest"));
+    }
+
+    #[test]
     fn test_session_error_display() {
         let err = SessionError::NotInitialized;
         assert!(err.to_string().contains("not initialized"));
@@ -194,6 +350,12 @@ mod tests {
     fn test_resume_error_display() {
         let err = ResumeError::IntegrityCheckFailed;
         assert!(err.to_string().contains("integrity"));
+    }
+
+    #[test]
+    fn test_resume_error_invalid_magic() {
+        let err = ResumeError::InvalidMagic { got: [0, 0, 0, 0] };
+        assert!(err.to_string().contains("invalid resume file magic"));
     }
 
     #[test]
@@ -208,6 +370,15 @@ mod tests {
         let frame_err = FrameError::UnsupportedVersion { version: 99 };
         let codec_err = CodecError::from(frame_err);
         assert!(codec_err.to_string().contains("frame error"));
+    }
+
+    #[test]
+    fn test_codec_error_frame_payload_too_large() {
+        let codec_err = CodecError::FramePayloadTooLarge {
+            length: 70000,
+            max: 65535,
+        };
+        assert!(codec_err.to_string().contains("too large"));
     }
 
     #[test]
