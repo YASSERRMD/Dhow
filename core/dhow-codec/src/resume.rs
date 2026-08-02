@@ -241,13 +241,13 @@ impl ResumeHeader {
         let integrity_digest: [u8; 32] = bytes[64..96].try_into().unwrap();
 
         // Verify CRC32C
-        let expected_crc = crc32c_digest(&bytes[0..60]);
+        let expected_crc = crc32c_digest(&bytes[0..CRC_COVER_BYTES]);
         if crc32c != expected_crc {
             return Err(ResumeError::IntegrityCheckFailed);
         }
 
         // Verify integrity digest
-        let expected_digest = blake3_digest(&bytes[0..64]);
+        let expected_digest = blake3_digest(&bytes[0..INTEGRITY_COVER_BYTES]);
         if integrity_digest != expected_digest {
             return Err(ResumeError::IntegrityCheckFailed);
         }
