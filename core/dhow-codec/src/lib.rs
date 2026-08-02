@@ -16,6 +16,9 @@ pub mod frame;
 mod frame_test;
 #[cfg(test)]
 mod integrity_test;
+pub mod session;
+#[cfg(test)]
+mod session_test;
 
 use thiserror::Error;
 
