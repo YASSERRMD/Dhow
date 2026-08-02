@@ -1,5 +1,37 @@
 # Phase Log
 
+## Phase 12 - QR encode/decode
+
+**Objective:** QR code encoding and terminal rendering. Encode frame bytes as QR
+codes, render to terminal for inspection, support medium error correction.
+
+**Gates:** QR encodes arbitrary binary data; terminal rendering produces
+correct dimensions; proptest on small data ranges.
+
+### Gate output
+
+#### Rust tests
+
+```
+$ cargo test -p dhow-codec --lib qr_test
+running 12 tests
+test result: ok. 12 passed; 0 failed; 0 ignored
+```
+
+#### Clippy
+
+```
+$ cargo clippy -p dhow-codec -D warnings
+    Finished `dev` profile
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+21
+```
+
 ### Gate output
 
 #### Rust tests
