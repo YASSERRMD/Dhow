@@ -54,9 +54,19 @@ run_gate "ABI drift" \
     bash -c "'$ROOT/scripts/check_abi.sh'"
 
 # --- Go gates ---
+#
+# The Go package links against the Rust staticlib, so the core must be built
+# before anything Go runs. Without this a clean clone fails at the linker with
+# an error that says nothing about the real cause.
+
+run_gate "build rust core for cgo" \
+    bash -c "cd '$CORE_DIR' && cargo build --release -p dhow-ffi"
 
 run_gate "go vet" \
     bash -c "cd '$CLI_DIR' && go vet ./..."
+
+run_gate "go test -race" \
+    bash -c "cd '$CLI_DIR' && go test -race ./..."
 
 run_gate "go build" \
     bash -c "cd '$CLI_DIR' && go build ./..."

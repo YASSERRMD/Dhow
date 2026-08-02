@@ -1,5 +1,81 @@
 # Phase Log
 
+## Phase 19 - Go bindings
+
+**Objective:** Wrap the C ABI in a Go-idiomatic package so the CLI has
+something to call, with memory ownership rules documented and enforced, and
+wire the Go half of the ABI drift gate now that bindings exist.
+
+**Gates:** Go round trip equals the Rust round trip on shared inputs;
+`go test -race` clean; no double free or use-after-free; the drift gate detects
+a Go call to a symbol Rust does not export.
+
+### Design notes
+
+Go never sees a secret key. Operator keys stay opaque handles and the derived
+session key never leaves Rust. This is deliberate rather than incidental: Go's
+collector may copy a value while moving it, so a secret held in a Go slice
+could persist in memory after the slice was overwritten.
+
+Calls that can fail run with the OS thread locked. The last-error channel is
+thread-local in Rust, so without the lock a goroutine could be rescheduled
+between the failing call and the read and pick up another thread's message. A
+concurrency test with eight simultaneous transfers covers this.
+
+`Close` returns nothing rather than an `error`. Freeing a handle cannot fail;
+an error return would imply a failure mode that does not exist and would force
+every deferred call to discard a value. `errcheck` flagging the original
+signature is what surfaced this.
+
+`ErrIncomplete` and `ErrFrameRejected` are matchable with `errors.Is`, because
+both are conditions a receiver acts on rather than aborts for.
+
+### Drift gate, Go half
+
+Verified it bites by pointing a binding at a symbol Rust does not export:
+
+```
+  DRIFT: dhow_abi_versionx is called from Go but not exported by Rust
+ABI DRIFT DETECTED
+```
+
+### Gate additions
+
+`gate.sh` now builds the Rust core before the Go gates, since the Go package
+links the staticlib and a clean clone otherwise fails at the linker with an
+error that says nothing about the cause. It also runs `go test -race`, which
+the gate did not run at all: the Go side had no test execution in it despite
+the engineering standard requiring the race detector on in all test runs.
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+=== GATE: cargo fmt --check ===         PASS
+=== GATE: cargo clippy -D warnings ===  PASS
+=== GATE: cargo test ===                PASS
+=== GATE: cargo audit ===               PASS
+=== GATE: cargo deny ===                PASS
+=== GATE: ABI drift ===                 PASS
+=== GATE: build rust core for cgo ===   PASS
+=== GATE: go vet ===                    PASS
+=== GATE: go test -race ===             PASS
+=== GATE: go build ===                  PASS
+=== GATE: golangci-lint ===             PASS
+=== GATE: govulncheck ===               PASS
+
+=== GATE SUMMARY ===
+  Passed: 12
+  Failed: 0
+ALL GATES PASSED
+```
+
+```
+$ go test -race ./cli/internal/ffi/
+ok  	dhow/cli/internal/ffi	2.789s   (18 tests)
+```
+
+
 ## Phase 18 - C ABI and cbindgen
 
 **Objective:** Give `dhow-ffi` the C surface the architecture depends on:
