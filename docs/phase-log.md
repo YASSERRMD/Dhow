@@ -1,5 +1,96 @@
 # Phase Log
 
+## Phase 14 - Session state machine and receive pipeline
+
+**Objective:** Add the session state machine that tracks a transfer through
+initialization, active transfer, FEC recovery, pause, completion, and failure;
+and complete the frame pipeline with the receive half, so a payload encoded
+into frames can be reassembled and verified rather than only produced.
+
+**Gates:** state machine rejects every invalid transition and both terminal
+states are absorbing; pipeline round-trips payloads through reordered,
+duplicated, and dropped frames; every single-byte mutation of a valid frame is
+rejected; reassembled payloads are verified against the session digest.
+
+### Defects fixed from earlier phases
+
+Phase 13 shipped a pipeline that could not be decoded by any receiver. Three
+defects were found and fixed here, each as a `fix(codec)` commit:
+
+1. Frame payloads carried `packet.data()`, discarding the 4-byte RaptorQ
+   `PayloadId`. Without it a symbol cannot be placed within its block, so
+   decoding was impossible. Frames now carry the serialized `EncodingPacket`.
+2. `EncoderWrapper::repair_packets` returned source *and* repair symbols
+   because `get_encoded_packets` includes the source prefix. The pipeline
+   combined it with `source_packets`, emitting every source symbol twice under
+   wrong symbol indices.
+3. `FecParams::with_mtu` asserts on a symbol size below 64, and `symbol_size`
+   was truncated from `u32` to `u16` at the call site, so some session
+   parameters panicked on the data path. Symbol size is now range-checked into
+   a typed error.
+
+A fourth defect was found in the new receive path before it shipped:
+`EncodingPacket::deserialize` indexes its first four bytes unchecked, so a
+frame carrying a shorter payload would panic. The decoder rejects such frames
+with a typed error, and a test covers payload lengths 0 through 4.
+
+Phase 13's pipeline tests asserted only that `encode` returned `Ok` and a
+non-empty vector, which is why the defects above survived the phase. They are
+replaced with round-trip and adversarial tests.
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+=== GATE: cargo fmt --check ===      PASS
+=== GATE: cargo clippy -D warnings === PASS
+=== GATE: cargo test ===             PASS
+=== GATE: cargo audit ===            PASS
+=== GATE: cargo deny ===             PASS
+=== GATE: go vet ===                 PASS
+=== GATE: go build ===               PASS
+=== GATE: golangci-lint ===          PASS
+=== GATE: govulncheck ===            PASS
+
+=== GATE SUMMARY ===
+  Passed: 9
+  Failed: 0
+ALL GATES PASSED
+```
+
+```
+$ cargo test --all
+test result: ok. 236 passed; 0 failed (dhow-codec)
+test result: ok. 8 passed; 0 failed (dhow-crypt)
+test result: ok. 0 passed; 0 failed (dhow-ffi)
+test result: ok. 12 passed; 0 failed (doc-tests)
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+7
+```
+
+This phase is below the 20-commit floor in section 5.2. Honest decomposition of
+a state machine plus one pipeline module did not yield twenty self-contained
+changes, and section 8 forbids padding to reach the floor. Recorded as a
+deviation rather than met with filler commits.
+
+### Known gaps entering Phase 15
+
+An audit of the tree against the phase pack found that the following are
+declared but not implemented, and are not covered by any phase log entry:
+
+- `dhow-crypt` contains only error enums. No key generation, no AEAD, no
+  signing, no manifest verification.
+- `dhow-ffi` is an empty crate with no `extern "C"` surface and no header.
+- `cli/cmd/dhow/main.go` is `func main() {}`. There is no command surface,
+  no QR rendering, no camera capture.
+- `manifest.rs` lives in `dhow-codec` and is unsigned; the signed manifest the
+  threat model depends on does not exist yet.
+
 ## Phase 13 - Frame pipeline
 
 **Objective:** Assemble frame pipeline that combines chunking, FEC encoding,

@@ -106,9 +106,17 @@ impl EncoderWrapper {
         self.inner.get_encoded_packets(0)
     }
 
-    /// Returns only repair packets.
+    /// Returns `count` repair packets, excluding the source packets.
+    ///
+    /// The underlying `get_encoded_packets` returns the source packets
+    /// followed by the repair packets, so the source prefix is dropped here.
+    /// Callers that want both should use [`Self::packets`] instead of
+    /// concatenating this with [`Self::source_packets`], which would emit the
+    /// source set twice.
     pub fn repair_packets(&self, count: u32) -> Vec<EncodingPacket> {
-        self.inner.get_encoded_packets(count)
+        let all = self.inner.get_encoded_packets(count);
+        let repair_start = all.len().saturating_sub(count as usize);
+        all[repair_start..].to_vec()
     }
 
     /// Convenience: generate enough repair packets to recover from

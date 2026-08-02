@@ -29,6 +29,9 @@ pub mod resume;
 #[cfg(test)]
 mod resume_test;
 pub mod session;
+pub mod session_state;
+#[cfg(test)]
+mod session_state_test;
 #[cfg(test)]
 mod session_test;
 
