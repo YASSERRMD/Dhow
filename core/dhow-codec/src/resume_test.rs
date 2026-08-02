@@ -1,5 +1,7 @@
 //! Tests for the resume file wire format module.
 
+use proptest::prelude::*;
+
 use crate::resume::{
     BlockEntry, CRC_COVER_BYTES, INTEGRITY_COVER_BYTES, RESUME_HEADER_SIZE, RESUME_MAGIC,
     RESUME_VERSION, ResumeFile, ResumeHeader,
@@ -232,4 +234,23 @@ fn test_resume_single_block() {
     let parsed = ResumeFile::from_bytes(&bytes).unwrap();
     assert_eq!(parsed.entries().len(), 1);
     assert_eq!(parsed.entries()[0].symbols_held, 16);
+}
+
+proptest! {
+    #[test]
+    fn prop_resume_round_trip(
+        session_id in proptest::array::uniform16(proptest::arbitrary::any::<u8>()),
+        symbol_counts in proptest::collection::vec(1u32..200, 1..10)
+    ) {
+        let entries: Vec<BlockEntry> = symbol_counts.iter().enumerate().map(|(i, &sc)| {
+            let bitmap_len = (sc as usize).div_ceil(8);
+            let bitmap = vec![0xAA; bitmap_len];
+            BlockEntry::new(i as u32, sc, sc / 2, &bitmap)
+        }).collect();
+        let header = ResumeHeader::new(session_id, &entries);
+        let resume = ResumeFile::build(&header, &entries);
+        let bytes = resume.to_vec();
+        let parsed = ResumeFile::from_bytes(&bytes).unwrap();
+        prop_assert_eq!(parsed.entries().len(), entries.len());
+    }
 }
