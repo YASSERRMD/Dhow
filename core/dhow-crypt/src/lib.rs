@@ -13,6 +13,9 @@ mod kdf_test;
 pub mod key;
 #[cfg(test)]
 mod key_test;
+pub mod manifest;
+#[cfg(test)]
+mod manifest_test;
 
 use thiserror::Error;
 
@@ -130,6 +133,10 @@ pub enum ManifestError {
     /// The manifest session ID does not match.
     #[error("manifest session ID mismatch")]
     SessionMismatch,
+
+    /// The manifest is structurally invalid in a way with no dedicated variant.
+    #[error("malformed manifest: {details}")]
+    Malformed { details: String },
 }
 
 /// Top-level error type for the crypt crate.
