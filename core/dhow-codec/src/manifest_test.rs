@@ -2,7 +2,6 @@
 
 use crate::manifest::{FileEntry, MANIFEST_MAGIC, MANIFEST_VERSION, Manifest, ManifestHeader};
 
-
 fn test_signature() -> [u8; 64] {
     [0xCD; 64]
 }
