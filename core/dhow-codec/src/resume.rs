@@ -1,7 +1,8 @@
 //! Resume file wire format.
 //!
 //! Implements the resume file format described in `proto/resume.md`.
-//! Resume files allow the receiver to save and restore transfer progress.
+//! Resume files allow the receiver to save and restore transfer progress
+//! on disk, with integrity protection via CRC32C and BLAKE3 digest.
 //!
 //! ## Fixed Header (96 bytes)
 //!
@@ -17,7 +18,7 @@
 //! | 64 | 32 | Integrity Digest (BLAKE3 of 0..64) |
 //! | 96 | var | Block Entries |
 //!
-//! ## Block Entry (16 bytes + bitmap)
+//! ## Block Entry
 //!
 //! | Offset | Size | Field |
 //! |--------|------|-------|
@@ -28,7 +29,7 @@
 //!
 //! ## Integrity
 //!
-//! - **CRC32C**: Covers bytes 0..60.
+//! - **CRC32C**: Covers bytes 0..60 (magic through reserved2).
 //! - **Integrity Digest**: BLAKE3 of bytes 0..64 (includes CRC32C).
 //!
 //! # Example
@@ -37,7 +38,7 @@
 //! use dhow_codec::resume::{ResumeFile, ResumeHeader, BlockEntry};
 //!
 //! let mut bitmap = vec![0u8; 4];
-//! bitmap[0] = 0b00000101; // symbols 0 and 2 received
+//! bitmap[0] = 0b00000101;
 //! let entries = vec![BlockEntry::new(0, 8, 2, &bitmap)];
 //! let header = ResumeHeader::new([0u8; 16], &entries);
 //! let resume = ResumeFile::build(&header, &entries);
