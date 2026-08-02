@@ -1,0 +1,41 @@
+# cbindgen configuration for the Dhow C ABI.
+#
+# The header is generated from the Rust source and committed, so a caller can
+# build against it without a Rust toolchain. scripts/gen_header.sh regenerates
+# it; scripts/check_abi.sh fails the build if the committed header and the
+# source disagree.
+
+language = "C"
+header = """
+/*
+ * dhow.h - C ABI for the Dhow air-gapped data courier.
+ *
+ * GENERATED FILE. Do not edit by hand.
+ * Regenerate with scripts/gen_header.sh after changing dhow-ffi.
+ *
+ * Conventions:
+ *   - Every function returns DhowStatus (0 ok, negative on failure), or a
+ *     handle that is NULL on failure.
+ *   - Handles are opaque and must be released with the matching _free.
+ *     Passing NULL to a _free is a no-op.
+ *   - Buffers are caller-allocated. Call with a NULL buffer to learn the
+ *     required size, then call again with a buffer at least that large.
+ *   - No function accepts or returns raw secret key material.
+ */"""
+include_guard = "DHOW_H"
+autogen_warning = ""
+documentation = true
+documentation_style = "doxy"
+cpp_compat = true
+tab_width = 4
+style = "type"
+
+[export]
+prefix = ""
+
+[enum]
+prefix_with_name = true
+rename_variants = "ScreamingSnakeCase"
+
+[parse]
+parse_deps = false
