@@ -48,6 +48,11 @@ run_gate "cargo audit" \
 run_gate "cargo deny" \
     bash -c "cd '$CORE_DIR' && cargo deny check"
 
+# --- ABI gates ---
+
+run_gate "ABI drift" \
+    bash -c "'$ROOT/scripts/check_abi.sh'"
+
 # --- Go gates ---
 
 run_gate "go vet" \

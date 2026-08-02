@@ -1,5 +1,92 @@
 # Phase Log
 
+## Phase 18 - C ABI and cbindgen
+
+**Objective:** Give `dhow-ffi` the C surface the architecture depends on:
+a handle-based encoder, decoder, and key API; a status-code and last-error
+channel; `catch_unwind` at every entry point; a cbindgen-generated header; and
+an ABI drift gate wired into `gate.sh`.
+
+**Gates:** header generates deterministically; every function documented in the
+header; no raw key bytes in any signature; a forced null or malformed input
+surfaces as a status code rather than a crash; the drift gate fails on a
+deliberate mismatch.
+
+### Starting point
+
+`dhow-ffi` was six lines: a doc comment and `#![allow(unsafe_code)]`. It had no
+exported symbols, no header, and nothing for Go to call.
+
+### Design notes
+
+No function accepts or returns raw secret key material. Operator keys live
+behind opaque handles, and the derived session key never leaves Rust:
+`dhow_encoder_new` takes a key handle and a salt and derives internally.
+
+Buffers are always caller-allocated, so this library never returns a pointer
+the caller must free and no two allocators can disagree about a block.
+Variable-length output uses one convention throughout: pass a null buffer to
+learn the required size, then call again.
+
+`dhow_encoder_params` reports the parameters the encoder actually used. The
+caller describes the plaintext, but framing operates on ciphertext, which is
+longer by the AEAD tag. Exposing the resolved values keeps the caller from
+having to reimplement the length and digest rules to fill in the manifest.
+This was added after the tests needed a fragile helper to recompute the digest,
+which was a signal that the ABI was missing something a real sender needs.
+
+The panic guard is a backstop, not a strategy. The core is written to be
+panic-free on arbitrary input; a caught panic is a bug here. The panic payload
+is not forwarded to the caller, because it can interpolate arbitrary values
+including data-path bytes, and the error channel's contents must stay safe to
+log.
+
+### Drift gate
+
+`scripts/check_abi.sh` regenerates the header into a temporary file and diffs
+it against the committed one, then cross-checks symbol presence in both
+directions between Rust and Go.
+
+Verified it bites: renaming `dhow_encoder_frame_count` in the committed header
+produced
+
+```
+  DRIFT: core/include/dhow.h is stale; run scripts/gen_header.sh
+  DRIFT: dhow_encoder_frame_count is exported from Rust but absent from dhow.h
+ABI DRIFT DETECTED
+```
+
+and the gate passed again once restored. The Go binding check reports that it
+is skipped while `cli/internal/ffi` does not exist, rather than passing
+silently.
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+=== GATE: cargo fmt --check ===        PASS
+=== GATE: cargo clippy -D warnings === PASS
+=== GATE: cargo test ===               PASS
+=== GATE: cargo audit ===              PASS
+=== GATE: cargo deny ===               PASS
+=== GATE: ABI drift ===                PASS
+=== GATE: go vet ===                   PASS
+=== GATE: go build ===                 PASS
+=== GATE: golangci-lint ===            PASS
+=== GATE: govulncheck ===              PASS
+
+=== GATE SUMMARY ===
+  Passed: 10
+  Failed: 0
+ALL GATES PASSED
+```
+
+```
+$ cargo test -p dhow-ffi
+test result: ok. 20 passed; 0 failed; 0 ignored
+```
+
+
 ## Phase 17 - Manifest signing and verification
 
 **Objective:** Sign the manifest with Ed25519 and give the receiver a
