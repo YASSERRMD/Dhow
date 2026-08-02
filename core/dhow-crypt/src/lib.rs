@@ -4,6 +4,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aead;
+#[cfg(test)]
+mod aead_test;
+pub mod kdf;
+#[cfg(test)]
+mod kdf_test;
 pub mod key;
 #[cfg(test)]
 mod key_test;

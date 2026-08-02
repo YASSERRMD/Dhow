@@ -1,5 +1,66 @@
 # Phase Log
 
+## Phase 16 - Payload AEAD
+
+**Objective:** Encrypt the payload with XChaCha20-Poly1305 before chunking,
+derive the payload key and the frame session key from the operator key with
+HKDF-BLAKE3 under a per-transfer salt, and prove the crypt and codec layers
+compose into a working transfer.
+
+**Gates:** decrypt of tampered ciphertext fails; nonce and salt uniqueness
+across transfers; end-to-end transfer round trips through dropped, reordered,
+duplicated, and corrupted frames; replayed and foreign-key transfers fail
+closed.
+
+### Design notes
+
+The operator key is never used to encrypt anything. Each transfer draws a
+random 32-byte salt and derives two independent keys from it under separate
+HKDF `info` strings, so disclosing the frame MAC key does not disclose the key
+protecting the payload, and two transfers between the same operators share no
+key material.
+
+XChaCha20's 192-bit nonce is wide enough to draw at random per transfer, which
+suits a courier whose two halves never communicate and so cannot agree a
+counter. The session ID is authenticated as associated data, so a recording of
+one session fails to decrypt if replayed into another.
+
+Decryption failures are reported identically whether the key, nonce, session,
+or ciphertext was wrong. Distinguishing them would tell an attacker probing
+with modified captures which part to change next.
+
+### Defect found by the new tests
+
+The HKDF expand loop incremented its `u8` block counter after emitting the
+final block, which overflowed on a full-length derivation. Caught by the
+output-length limit test and fixed in this phase.
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+=== GATE: cargo fmt --check ===      PASS
+=== GATE: cargo clippy -D warnings === PASS
+=== GATE: cargo test ===             PASS
+=== GATE: cargo audit ===            PASS
+=== GATE: cargo deny ===             PASS
+=== GATE: go vet ===                 PASS
+=== GATE: go build ===               PASS
+=== GATE: golangci-lint ===          PASS
+=== GATE: govulncheck ===            PASS
+
+=== GATE SUMMARY ===
+  Passed: 9
+  Failed: 0
+ALL GATES PASSED
+```
+
+```
+$ cargo test -p dhow-crypt
+test result: ok. 79 passed; 0 failed   (unit)
+test result: ok. 11 passed; 0 failed   (tests/end_to_end.rs)
+```
+
 ## Phase 15 - Key generation and storage
 
 **Objective:** Give `dhow-crypt` the key handling it had only declared errors
