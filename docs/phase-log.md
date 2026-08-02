@@ -72,6 +72,30 @@ $ git log --oneline main..HEAD | wc -l
 16
 ```
 
+### Gate output
+
+#### Rust tests
+
+```
+$ cargo test -p dhow-codec --lib resume_test
+running 23 tests
+test result: ok. 23 passed; 0 failed; 0 ignored
+```
+
+#### Clippy
+
+```
+$ cargo clippy -p dhow-codec -D warnings
+    Finished `dev` profile
+```
+
+### Atomic commit count
+
+```
+$ git log --oneline main..HEAD | wc -l
+16
+```
+
 ## Phase 8 - Frame wire format
 
 **Objective:** Binary frame header and payload wire format per `proto/frame.md`.
