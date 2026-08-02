@@ -302,7 +302,31 @@ mod tests {
     }
 
     #[test]
-    fn test_session_error_display() {
+    fn test_manifest_error_display() {
+        let err = ManifestError::PathTraversal { name: "test".into() };
+        assert!(err.to_string().contains("path traversal"));
+    }
+
+    #[test]
+    fn test_manifest_error_crc_mismatch() {
+        let err = ManifestError::CrcMismatch;
+        assert!(err.to_string().contains("CRC"));
+    }
+
+    #[test]
+    fn test_manifest_error_invalid_magic() {
+        let err = ManifestError::InvalidMagic { got: [0, 0, 0, 0] };
+        assert!(err.to_string().contains("invalid magic"));
+    }
+
+    #[test]
+    fn test_codec_error_from_manifest() {
+        let manifest_err = ManifestError::SignatureVerificationFailed;
+        let codec_err = CodecError::from(manifest_err);
+        assert!(codec_err.to_string().contains("manifest"));
+    }
+
+    #[test]
         let err = SessionError::NotInitialized;
         assert!(err.to_string().contains("not initialized"));
     }
