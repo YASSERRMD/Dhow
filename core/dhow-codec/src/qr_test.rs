@@ -93,3 +93,18 @@ fn test_qr_inner() {
     let inner = qr.inner();
     assert_eq!(inner.size(), qr.size() as i32);
 }
+
+use proptest::prelude::*;
+
+proptest! {
+    #[test]
+    fn prop_qr_encode_small_data(
+        data in proptest::collection::vec(proptest::arbitrary::any::<u8>(), 1..200)
+    ) {
+        let qr = QrCodeEncoder::encode(&data);
+        prop_assert!(qr.is_ok());
+        let qr = qr.unwrap();
+        prop_assert!(qr.version() >= 1);
+        prop_assert!(qr.size() >= 21);
+    }
+}
