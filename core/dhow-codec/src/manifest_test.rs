@@ -205,6 +205,19 @@ fn test_manifest_header_accessors() {
     assert_eq!(header.signature(), [0u8; 64]);
 }
 
+#[test]
+fn test_manifest_single_entry() {
+    let entries = vec![FileEntry::new("single.txt", 42, [0x99; 32])];
+    let header = ManifestHeader::new([0; 16], &entries, 42);
+    let manifest = Manifest::build(&header, &entries, &[0x11; 64]);
+    let bytes = manifest.to_vec();
+    let parsed = Manifest::from_bytes(&bytes).unwrap();
+    assert_eq!(parsed.entries().len(), 1);
+    assert_eq!(parsed.entries()[0].name, "single.txt");
+    assert_eq!(parsed.entries()[0].size, 42);
+    assert_eq!(parsed.entries()[0].digest, [0x99; 32]);
+}
+
 use proptest::prelude::*;
 
 proptest! {
