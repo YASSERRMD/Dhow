@@ -18,6 +18,150 @@ feeling. B-6 already records that `send` builds the whole archive in memory,
 which is the first thing a budget will hit - the phase either fixes it or
 records what the measurement actually shows.
 
+### The benchmarks found a defect in their first run
+
+`crc32c_digest` was a byte-at-a-time table lookup running at **513 MiB/s**,
+against BLAKE3 at **2.1 GiB/s**. A CRC whose entire job is to be the cheap check
+*before* the cryptographic one, running four times slower than the cryptographic
+one, is not doing that job - and the frame benchmark showed it was the single
+largest per-frame cost in the encoder, ahead of the keyed MAC it precedes.
+
+Replaced with slicing-by-eight: eight const-generated tables, eight bytes per
+iteration, no `unsafe` and no new dependency - which matters, because
+`dhow-codec` is `#![forbid(unsafe_code)]` and a hardware CRC intrinsic would
+need one or the other. Measured on the same machine in the same run:
+
+```
+digest/crc32c/4194304   time:   [1.7082 ms 1.7104 ms 1.7130 ms]
+                        thrpt:  [2.2804 GiB/s 2.2838 GiB/s 2.2868 GiB/s]
+                        change: [-78.116% -78.049% -77.990%] (p = 0.00 < 0.05)
+
+frame/serialize/1320    2.63 us -> 708 ns   (-73.1%)
+frame/parse/1024        2.02 us -> 532 ns   (-73.8%)
+```
+
+The output is unchanged by construction and the known-answer tests, the
+streaming-equals-one-shot property, and the golden vectors in
+`proto/vectors.json` all pass untouched, which is what makes that claim
+checkable rather than asserted.
+
+**This is the argument for benchmarks in one paragraph.** The defect had been in
+the tree since Phase 6 and every test passed the whole time, because they are a
+correctness suite and this was not a correctness defect. Nothing was going to
+find it except measuring.
+
+### The memory budget is a ratio, and that is a deviation
+
+The phase pack asks for "a peak-RSS budget for a 1 GiB transfer". The budget
+here is on the **ratio** of peak resident memory to dataset size, checked at
+16 MiB. The reasoning, which is in `scripts/rss.sh` and `docs/BENCHMARKS.md`
+rather than only here:
+
+An absolute number for one dataset size is expensive to check, so it would not
+be checked often; it says nothing about a 10 GiB transfer; and a regression that
+doubles memory use at every size still passes it if the number was set with any
+slack. What the design fixes is not a number of bytes, it is how many copies of
+the dataset are resident at once - which is a ratio, is the same at every size
+above the fixed overhead, and is cheap enough to run on every gate.
+
+**The cost of the deviation is real**: the gate does not run a 1 GiB transfer,
+so a defect appearing only above some threshold would not be caught by it.
+`scripts/rss.sh 1024` runs the real thing.
+
+Send and receive have separate budgets. They are separate paths with genuinely
+different numbers, and one loose budget covering both would let the cheaper one
+regress by ninety percent before failing.
+
+### What the budget found
+
+```
+$ scripts/rss.sh
+  dataset   16.0 MiB
+  frames    14008
+  send RSS  166.9 MiB (10.43x dataset)
+  recv RSS  102.2 MiB (6.39x dataset)
+```
+
+Three consecutive runs varied by under 2%. At 64 MiB the ratios fall to 9.07x
+and 5.85x as the fixed overhead amortises, so the 16 MiB figures are the
+conservative end.
+
+**For a 1 GiB dataset that is roughly 9 GiB to send and 6 GiB to receive.** That
+is not a good number and it is the honest one. It is not a leak and not a tuning
+problem: it is a design that assumes the payload fits in memory, and the copies
+are enumerated in `docs/BENCHMARKS.md` - the archive, the copy out of the
+`strings.Builder`, the ciphertext, and every frame held at once.
+
+B-6 now carries the measured figure instead of a description. B-8 is opened for
+the receive half, which has the same shape one copy shallower.
+
+Fixing either means a streaming handle across the ABI, replacing the
+`payload`/`payload_len` pair in `dhow_encoder_new` with feed-and-poll. That is a
+phase of its own and was not attempted here rather than being half-done.
+
+### One change that did not do what it looked like it would
+
+`send` now writes frames one at a time instead of pulling the whole stream into
+a `[][]byte` first. That removes a real allocation of roughly 1.1x the dataset -
+and it **did not move the measured peak at all**: 8.99x before, 9.07x after at
+64 MiB, which is inside the run-to-run variation.
+
+The reason is that the peak happens earlier. By the time `dhow_encoder_new`
+returns, Rust is already holding the ciphertext and every frame; the Go-side
+copy that came later never became the high-water mark. The change is kept
+because it is correct and becomes load-bearing the moment the encoder is made
+streaming, but it is recorded as what it is rather than as a win it did not
+produce.
+
+### Gate output
+
+The gate goes from 19 checks to 21: benchmarks build, and the RSS budget.
+Benchmarks are built and not run to completion, because a full criterion pass is
+minutes and a gate that takes minutes is a gate people skip; building them
+catches the failure that actually happens, which is a benchmark rotting against
+the code it measures.
+
+```
+$ ./scripts/gate.sh
+=== GATE: cargo fmt --check ===          PASS
+=== GATE: cargo clippy -D warnings ===   PASS
+=== GATE: cargo test ===                 PASS
+=== GATE: cargo audit ===                PASS
+=== GATE: cargo deny ===                 PASS
+=== GATE: ABI drift ===                  PASS
+=== GATE: wire-format spec consistency === PASS
+=== GATE: golden vector conformance ===  PASS
+=== GATE: build rust core for cgo ===    PASS
+=== GATE: gofmt --check ===              PASS
+=== GATE: go vet ===                     PASS
+=== GATE: go test -race ===              PASS
+=== GATE: go build ===                   PASS
+=== GATE: golangci-lint ===              PASS
+=== GATE: govulncheck ===                PASS
+=== GATE: loopback end-to-end ===        PASS
+=== GATE: operations guide drill ===     PASS
+=== GATE: chaos soak (12 rounds) ===     PASS
+=== GATE: benchmarks build ===           PASS
+=== GATE: peak RSS budget ===            PASS
+=== GATE: fuzz targets (10s each) ===    PASS
+
+=== GATE SUMMARY ===
+  Passed:  21
+  Failed:  0
+  Skipped: 0
+ALL GATES PASSED
+```
+
+(The verdicts above are transcribed one-per-gate from the run; the raw output
+interleaves each gate's own stdout between the heading and its PASS.)
+
+### Deviation: 4 atomic commits, not 20
+
+The same shape as Phase 30 and the same reason: the phase is a criterion suite,
+a CRC replacement, a Go benchmark file, and an RSS harness with its
+documentation. Each is one logical change in one or two files. Recorded rather
+than padded.
+
 ## Phase 30 - Property and differential testing
 
 **Objective:** the property tests in this tree are uneven. `dhow-codec` has had
