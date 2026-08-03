@@ -14,6 +14,222 @@ exposes save and verify, and the CLI drives both.
 every tampering class against the resume state is rejected with a distinct
 error; the Rust CI gates actually execute for the first time.
 
+### The design problem: RaptorQ state cannot be serialized
+
+The obvious implementation of resume - save the decoder, load it back - is not
+available. A RaptorQ decoder holds partially-solved linear systems, not a set
+of symbols, and the crate exposes no way to serialize one. So progress is kept
+the only way it can be: the receiver journals the frames it accepted and
+replays them into a fresh decoder on restart.
+
+That turns the problem into a different one. A journal is a file an operator
+can edit, so the replay needs something to check itself against, and the
+existing resume format could not provide it. Version 1 recorded which symbols
+each block held - which says what the replay should produce, not what the
+journal on disk is. Two journals with the same symbols in a different order
+produce identical bitmaps and different decoder states.
+
+Version 2 adds the binding. The decoder keeps a rolling BLAKE3 over the bytes
+of every accepted frame in acceptance order; the resume file carries it. Any
+reordering, insertion, truncation, or substitution moves it. There is a test
+that asserts the bitmaps are identical before showing that the digest still
+catches a swap of two frames, because that is the case the bitmap alone
+cannot see.
+
+The second field is `journal_bytes`. The journal is appended on every accepted
+frame while the index is rewritten every 200, so a crash routinely leaves a
+journal longer than its index. Without a recorded length that ordinary residue
+would fail the digest and cost the operator the whole capture. With it, the
+tail is discarded as progress that was never durably recorded. The opposite
+case - an index covering more journal than exists - is refused, because the
+journal is fsynced before the index that describes it, so it cannot happen by
+accident.
+
+The header grew from 96 to 128 bytes to hold both. `proto/migration.md`
+records that there is no conversion from v1: the digest a v1 file would need
+was never computed. The cost is one discarded state directory, and nothing
+that crossed the optical channel is affected.
+
+### What actually defends the resume path
+
+The threat model's entry for tampered resume files credited the integrity
+digest with stopping tampering. It does not. A resume file is local state with
+no key in it, so anyone who can rewrite the file can recompute both its CRC
+and its digest.
+
+What stops a doctored journal is that every replayed frame goes through
+`Decoder.Accept` exactly as it did on first capture: MAC against the session
+key, CRC, session binding, symbol bounds. The state directory holds no key
+material. The digests buy something real but smaller - a half-written index is
+never believed, and an index cannot be paired with a journal it does not
+describe - and the entry now says so, along with the residual risk that
+someone with write access can still delete the directory and cost a recapture.
+
+### Defect found: the golden vectors were BLAKE2b, not BLAKE3
+
+Adding the first Rust test that parses the committed resume vectors made them
+fail their own integrity check. `scripts/gen_vectors.py` had a function named
+`blake3` whose body was `hashlib.blake2b`. Every integrity digest in
+`proto/vectors.json` was a BLAKE2b digest published as BLAKE3, and had been
+since Phase 3.
+
+Nothing caught it because nothing had ever parsed those vectors. The chunker
+vectors are the only ones with a Rust golden test and they carry no digests;
+`check_spec.py` and `conformance_test.py` checked structure, sizes, magic, and
+reserved fields, never a digest value.
+
+This mattered beyond the repository. The vectors are the conformance suite a
+third-party implementation is meant to build against, so anyone following them
+would have shipped a receiver that rejects every real Dhow transfer.
+
+Fixed with a pure-Python reference BLAKE3 in `scripts/blake3_ref.py`, kept
+deliberately as a second implementation - calling into the Rust core would
+make the vectors agree with the code by construction and stop being evidence
+of anything. It self-tests against the published BLAKE3 vectors at eleven
+input lengths, including the multi-chunk tree cases that a naive
+implementation gets wrong. The Rust side now parses the resume vectors and
+re-serializes them byte for byte, so the loop is closed in both directions.
+
+The conformance suite's version check was also hardcoded to `0x01` for every
+format, which would have let any format be bumped without the suite noticing.
+It now takes the expected version per vector.
+
+### Defect found: the CI Rust gates had never run
+
+Every one of them, since Phase 2:
+
+- `rustfmt`, `clippy`, `rust-test`, and `cargo-deny` ran `cargo` from the
+  repository root. The workspace is in `core/`, so each died with "could not
+  find Cargo.toml" before doing any work.
+- `cargo-audit` referenced `rustsec/audit-ci-action`, which does not exist.
+  The job failed at action resolution, before any advisory database was
+  consulted.
+- No Go job built the Rust staticlib the cgo package links against, so
+  `go vet`, `go build`, `govulncheck`, and `golangci-lint` all died at the
+  linker on `-ldhow_ffi`.
+- CI ran no Go tests at all, only vet and build. The race detector is the
+  reason to run them in CI.
+
+All fixed, plus a `go-test` job that runs `go test -race` to match
+`scripts/gate.sh`.
+
+### Defect found: the golangci-lint config had never applied
+
+`.golangci.yml` used the v1 top-level `linters-settings` and
+`issues.exclude-rules` keys. golangci-lint v2 rejects both:
+
+```
+$ golangci-lint config verify        # before
+jsonschema: "issues" does not validate with "/properties/issues/additionalProperties": additional properties 'exclude-rules' not allowed
+jsonschema: "" does not validate with "/additionalProperties": additional properties 'linters-settings' not allowed
+The command is terminated due to an error: the configuration contains invalid elements
+```
+
+`golangci-lint run` did not fail on this - it discarded the unknown keys and
+linted with defaults. So the gate ran green for twenty-two phases while none
+of the configured strictness was in effect.
+
+With the keys parsed, nineteen findings surfaced. Fifteen were `check-blank`
+flagging the codebase's deliberate, commented `_ = f.Close()`, which is the
+explicit form errcheck exists to encourage; `check-blank` leaves no way to
+express "considered and discarded", so it is turned off with the reason
+recorded in the config rather than dropped quietly. Two unchecked type
+assertions in tests and two gocritic style findings were real and are fixed.
+gocritic's `dupImport` reads cgo's `C` and `unsafe` as one import twice and
+cannot be satisfied in source, so it is excluded for that one file.
+
+### Deviation
+
+The gate for this phase, as written in the pack, called for killing the
+receiver at 40 percent in loopback. The harness does that with `-stop-after`
+rather than a signal: the directory transport processes six thousand frames in
+about a second, so timing a `kill` against it is a race that would make the
+harness flaky rather than strict. `SIGINT` and `SIGTERM` are implemented and
+save before exiting - that is what an operator's Ctrl-C does - but the
+unattended harness drives the deterministic path. Two interruptions are used
+rather than one, so a journal that is replayed, extended, and replayed again
+is covered.
+
+### Harness output
+
+```
+$ scripts/loopback.sh 4 20
+  PASS  sent 6592 frames in 1s
+  PASS  clean transfer round trips byte for byte
+  PASS  executable bit survived
+  PASS  recovered from 1319 dropped frames
+  PASS  recovered from a contiguous outage of 1098 frames
+  PASS  corrupted frames were rejected without poisoning the decode
+  PASS  resumed through two interruptions and round tripped byte for byte
+  PASS  tampered resume state and journal both fail closed
+  PASS  wrong key fails closed and writes nothing
+  PASS  verify accepts a good dataset
+  PASS  verify rejects a damaged dataset
+  PASS  two sends of one dataset produce the same frame count
+=== LOOPBACK PASSED in 13s ===
+```
+
+### Verified by hand
+
+```
+$ dhow recv -key op.key -in frames -out received -state state -stop-after 60
+dhow: transfer incomplete: 60 frames accepted, 0 rejected; stopped before the
+end of the stream; progress saved in state, rerun with -state state to continue
+
+$ dhow recv -key op.key -in frames -out received -state state
+resumed 60 frames from state
+session   b023b5ee4a9dbff4d5ca703459dbdb8d
+resumed   60 frames
+accepted  256 frames
+rejected  0 frames
+files     2
+written   received
+```
+
+Each tampering class, through the shipped binary:
+
+```
+$ dhow recv ... -state state          # one byte flipped in the index
+dhow: saved state in state is unusable (dhow: resume state rejected: resume
+file integrity check failed (possible tampering)); delete it to start this
+transfer over                                                        exit 2
+
+$ dhow recv ... -state state          # one byte flipped in a journaled frame
+dhow: replaying saved progress from state: replaying journal record at 0:
+dhow: frame rejected: frame error: CRC32C mismatch                   exit 2
+
+$ dhow recv ... -state state          # state from a different transfer
+dhow: saved state in state belongs to session b023b5ee..., not eb96facf...;
+point -state at the right directory                                  exit 2
+```
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+=== GATE: cargo fmt --check ===       PASS
+=== GATE: cargo clippy -D warnings === PASS
+=== GATE: cargo test ===              PASS
+=== GATE: cargo audit ===             PASS
+=== GATE: cargo deny ===              PASS
+=== GATE: ABI drift ===               PASS
+=== GATE: build rust core for cgo === PASS
+=== GATE: go vet ===                  PASS
+=== GATE: go test -race ===           PASS
+=== GATE: go build ===                PASS
+=== GATE: golangci-lint ===           PASS
+=== GATE: govulncheck ===             PASS
+=== GATE: loopback end-to-end ===     PASS
+
+=== GATE SUMMARY ===
+  Passed: 13
+  Failed: 0
+ALL GATES PASSED
+```
+
+427 Rust tests and every Go package pass; the ABI moves to version 2 for the
+three new entry points and the new status code.
+
 ## Phase 23 - Loopback integration
 
 **Objective:** An unattended end-to-end harness that runs a real transfer
