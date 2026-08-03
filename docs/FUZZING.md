@@ -51,6 +51,30 @@ the nightly moves forward, and that is a deliberate commit rather than a
 surprise. `scripts/fuzz.sh` fails with a message naming the toolchain if it is
 not installed, so the failure is a one-line fix rather than a puzzle.
 
+## AddressSanitizer is off on macOS
+
+`cargo-fuzz` enables AddressSanitizer by default. On macOS 26 (Darwin 25) the
+ASan runtime shipped with the pinned nightly **hangs before executing a single
+input**: it spins at 100% CPU inside `__asan::InitializeShadowMemory`, in
+`get_dyld_hdr()`, and never leaves dyld initialisation. A ten-second run did not
+terminate after eleven minutes; the process was sampled and the stack confirms
+where it is stuck. This is an incompatibility between that sanitizer runtime and
+this operating system, not a defect in this code.
+
+`scripts/fuzz.sh` therefore selects `-s none` on Darwin and `-s address`
+everywhere else. Override with `DHOW_FUZZ_SANITIZER=address` to try it anyway.
+
+**What that costs, stated plainly.** Every target here exercises `dhow-codec`
+and `dhow-crypt`, and both carry `#![forbid(unsafe_code)]`. The memory errors
+ASan exists to catch cannot be written in them: an out-of-bounds index is a
+panic, and libFuzzer catches a panic. ASan would earn its keep against
+`dhow-ffi`, the one crate allowed `unsafe` — and no target here reaches it,
+which is a real gap in the *targets*, not one this workaround introduced. It is
+recorded in `docs/BACKLOG.md`.
+
+Without the sanitizer the targets run at roughly a million executions per
+second per target on this hardware, which is where the coverage comes from.
+
 ## Running it
 
 Install the tooling once:
