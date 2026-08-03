@@ -8,9 +8,22 @@
 //!
 //! # Algorithm
 //!
-//! Uses a precomputed 256-entry lookup table for performance. The table is
-//! generated at compile time via a `const fn` that applies the standard
-//! bit-by-bit CRC32C algorithm to each byte value 0–255.
+//! Slicing-by-eight: eight precomputed 256-entry tables, consuming eight bytes
+//! per iteration. All eight are generated at compile time by a `const fn`, the
+//! first by the standard bit-by-bit algorithm and the rest derived from it.
+//!
+//! The obvious byte-at-a-time table was what shipped until Phase 31, when a
+//! benchmark measured it at 513 MiB/s against BLAKE3's 2.1 GiB/s. A CRC whose
+//! whole job is to be the cheap check *before* the cryptographic one, running
+//! four times slower than the cryptographic one, is not doing that job: it was
+//! the single largest per-frame cost in the encoder, ahead of the keyed MAC it
+//! precedes.
+//!
+//! Slicing-by-eight is the standard answer and needs no `unsafe` and no
+//! dependency, which matters because this crate is `#![forbid(unsafe_code)]`
+//! and a hardware CRC intrinsic would need one or the other. The output is
+//! unchanged by construction, and the golden vectors in `proto/vectors.json`
+//! would catch it if it were not.
 //!
 //! # Parameters
 //!
@@ -50,18 +63,70 @@ const fn make_table() -> [u32; 256] {
     t
 }
 
-const CRC_TABLE: [u32; 256] = make_table();
+/// Derives the eight slicing tables from the byte-at-a-time one.
+///
+/// Table `k` answers "what does this byte contribute after `k` more bytes have
+/// been shifted through", which is what lets eight bytes be folded in at once.
+const fn make_slicing_tables() -> [[u32; 256]; 8] {
+    let mut tables = [[0u32; 256]; 8];
+    tables[0] = make_table();
+
+    let mut k = 1;
+    while k < 8 {
+        let mut n = 0;
+        while n < 256 {
+            let previous = tables[k - 1][n];
+            tables[k][n] = (previous >> 8) ^ tables[0][(previous & 0xFF) as usize];
+            n += 1;
+        }
+        k += 1;
+    }
+    tables
+}
+
+const CRC_TABLES: [[u32; 256]; 8] = make_slicing_tables();
+const CRC_TABLE: [u32; 256] = CRC_TABLES[0];
+
+/// Folds `data` into a running CRC state.
+///
+/// The state here is the raw register, without the initial or final inversion;
+/// both callers apply those themselves.
+fn fold(mut crc: u32, data: &[u8]) -> u32 {
+    let mut rest = data;
+
+    // Eight at a time while there are eight to take.
+    while rest.len() >= 8 {
+        let (chunk, tail) = rest.split_at(8);
+        rest = tail;
+
+        // The first four bytes are folded into the register; the second four
+        // index their own tables directly. This is what makes the eight
+        // independent of each other, and therefore pipelineable.
+        crc ^= u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+
+        crc = CRC_TABLES[7][(crc & 0xFF) as usize]
+            ^ CRC_TABLES[6][((crc >> 8) & 0xFF) as usize]
+            ^ CRC_TABLES[5][((crc >> 16) & 0xFF) as usize]
+            ^ CRC_TABLES[4][((crc >> 24) & 0xFF) as usize]
+            ^ CRC_TABLES[3][chunk[4] as usize]
+            ^ CRC_TABLES[2][chunk[5] as usize]
+            ^ CRC_TABLES[1][chunk[6] as usize]
+            ^ CRC_TABLES[0][chunk[7] as usize];
+    }
+
+    // The tail, byte at a time.
+    for &byte in rest {
+        crc = CRC_TABLE[((crc ^ byte as u32) & 0xFF) as usize] ^ (crc >> 8);
+    }
+    crc
+}
 
 /// Computes the CRC32C checksum of the given data (one-shot).
 ///
 /// This is the simplest interface for computing a CRC32C when the entire
 /// input is available in memory.
 pub fn crc32c_digest(data: &[u8]) -> u32 {
-    let mut crc = 0xFFFFFFFFu32;
-    for &byte in data {
-        crc = CRC_TABLE[((crc ^ byte as u32) & 0xFF) as usize] ^ (crc >> 8);
-    }
-    crc ^ 0xFFFFFFFF
+    fold(0xFFFFFFFF, data) ^ 0xFFFFFFFF
 }
 
 /// A streaming CRC32C hasher.
@@ -97,11 +162,7 @@ impl Default for Crc32cHasher {
 }
 
 fn crc32c_append(state: u32, data: &[u8]) -> u32 {
-    let mut crc = state ^ 0xFFFFFFFF;
-    for &byte in data {
-        crc = CRC_TABLE[((crc ^ byte as u32) & 0xFF) as usize] ^ (crc >> 8);
-    }
-    crc ^ 0xFFFFFFFF
+    fold(state ^ 0xFFFFFFFF, data) ^ 0xFFFFFFFF
 }
 
 #[cfg(test)]
