@@ -234,7 +234,12 @@ func runKeygen(env Env, args []string) error {
 	out := fs.String("out", "operator.key", "path to write the operator key to")
 	force := fs.Bool("force", false, "overwrite an existing key file")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	resolve := verbosityFlags(fs)
 	if err := fs.Parse(args); err != nil {
+		return &exitError{code: ExitUsage, err: err}
+	}
+	level, err := resolve()
+	if err != nil {
 		return &exitError{code: ExitUsage, err: err}
 	}
 
@@ -246,6 +251,8 @@ func runKeygen(env Env, args []string) error {
 		}
 	}
 
+	level.say(env.Stderr, loud, "drawing a key from the system CSPRNG\n")
+
 	key, err := ffi.GenerateKey()
 	if err != nil {
 		return failf(ExitInternal, "generating key: %w", err)
@@ -256,6 +263,9 @@ func runKeygen(env Env, args []string) error {
 		return failf(ExitInput, "writing %s: %w", *out, err)
 	}
 
+	if level == quiet && !*asJSON {
+		return nil
+	}
 	return emit(env.Stdout, *asJSON,
 		keygenResult{Path: *out, Mode: "0600"},
 		fmt.Sprintf("wrote operator key to %s (mode 0600)\n"+
