@@ -16,6 +16,9 @@ mod key_test;
 pub mod manifest;
 #[cfg(test)]
 mod manifest_test;
+/// Property tests for the crypto layer.
+#[cfg(test)]
+mod property_test;
 
 use thiserror::Error;
 

@@ -17,3 +17,8 @@ zeroize = "1"
 
 [dev-dependencies]
 dhow-codec = { path = "../dhow-codec" }
+# Property tests for the crypto layer. dhow-codec has had them since Phase 5
+# and this crate had none, which was the wrong way round: the codec's failure
+# mode is a dataset that does not reassemble, and this one's is a dataset that
+# reassembles into something an attacker chose.
+proptest = "1"
