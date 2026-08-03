@@ -1,5 +1,18 @@
 # Phase Log
 
+## Phase 25 - Verification that checks contents
+
+**Objective:** `dhow verify` currently counts files. A dataset with the right
+number of files, every one of them corrupted, passes. This phase gives the
+command something to check against: the transfer record gains a per-file
+inventory - name, size, executable bit, and content digest - and verify walks
+the extracted dataset and compares every one of them, reporting each
+discrepancy precisely rather than as a single failure.
+
+**Gates:** verify passes on a good dataset and fails with a distinct, accurate
+diagnosis for each corruption class: a missing file, an extra file, a
+truncated file, a single flipped byte, and a lost executable bit.
+
 ## Phase 24 - Interruption and resume, full stack
 
 **Objective:** A receiver that survives being killed. Progress is persisted to
