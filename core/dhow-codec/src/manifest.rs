@@ -192,7 +192,7 @@ impl FileEntry {
 
         let name_bytes = &bytes[2..2 + name_len];
         let name =
-            String::from_utf8(name_bytes.to_vec()).map_err(|_| ManifestError::InvalidKey {
+            String::from_utf8(name_bytes.to_vec()).map_err(|_| ManifestError::Malformed {
                 details: "file name contains invalid UTF-8".to_string(),
             })?;
 
@@ -314,7 +314,7 @@ impl ManifestHeader {
         let mut reserved1 = [0u8; 3];
         reserved1.copy_from_slice(&bytes[5..8]);
         if reserved1 != [0u8; 3] {
-            return Err(ManifestError::InvalidKey {
+            return Err(ManifestError::Malformed {
                 details: "reserved1 must be zero".to_string(),
             });
         }
@@ -327,7 +327,7 @@ impl ManifestHeader {
         let mut reserved2 = [0u8; 32];
         reserved2.copy_from_slice(&bytes[68..100]);
         if reserved2 != [0u8; 32] {
-            return Err(ManifestError::InvalidKey {
+            return Err(ManifestError::Malformed {
                 details: "reserved2 must be zero".to_string(),
             });
         }

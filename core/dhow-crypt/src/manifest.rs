@@ -226,6 +226,6 @@ fn convert_codec_error(err: dhow_codec::ManifestError) -> ManifestError {
         C::FileSizeTooLarge { size, max } => ManifestError::FileSizeTooLarge { size, max },
         C::InvalidFileCount { count } => ManifestError::InvalidBlockCount { count },
         C::SessionMismatch => ManifestError::SessionMismatch,
-        C::InvalidKey { details } => ManifestError::Malformed { details },
+        C::Malformed { details } => ManifestError::Malformed { details },
     }
 }

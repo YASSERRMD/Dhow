@@ -230,9 +230,12 @@ pub enum ManifestError {
     #[error("manifest session ID mismatch")]
     SessionMismatch,
 
-    /// The manifest signature is invalid.
-    #[error("invalid manifest signature: {details}")]
-    InvalidKey { details: String },
+    /// The manifest is structurally malformed in a way no other variant names.
+    ///
+    /// Used for a reserved field that is not zero, a name that is not UTF-8,
+    /// and a flag bit this version does not define.
+    #[error("malformed manifest: {details}")]
+    Malformed { details: String },
 }
 
 /// Errors that can occur during FEC encoding or decoding.
