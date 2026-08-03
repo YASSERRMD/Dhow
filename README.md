@@ -24,8 +24,14 @@ tool you can test end to end but not yet run across a real air gap.
 
 ## Documentation
 
-See [docs/](docs/) for the threat model, the operations guides, and the phase
-log. Wire formats live in [proto/](proto/).
+- [Operations Guide](docs/OPERATIONS.md) — setup, parameters, troubleshooting,
+  key ceremony
+- [Resuming an Interrupted Receive](docs/RESUME.md)
+- [Verifying a Received Dataset](docs/VERIFY.md)
+- [Threat Model](docs/THREAT-MODEL.md)
+- [Phase Log](docs/phase-log.md)
+
+Wire formats live in [proto/](proto/).
 
 ## License
 
