@@ -37,6 +37,7 @@ import (
 
 	"dhow/cli/internal/ffi"
 	"dhow/cli/internal/pack"
+	"dhow/cli/internal/render"
 )
 
 // Exit codes. See the package comment; these are a stable contract.
@@ -235,6 +236,10 @@ func runSend(env Env, args []string) error {
 	symbolSize := fs.Uint("symbol-size", 256, "bytes per symbol (64..65531)")
 	blocks := fs.Uint("blocks", 1, "number of source blocks")
 	overhead := fs.Uint("overhead", 50, "percent repair symbols above the minimum")
+	qrVersion := fs.Uint("qr-version", 0, "QR version 1..40, or 0 to fit each frame")
+	qrEcc := fs.String("qr-ecc", "M", "QR error correction: L, M, Q, or H")
+	qrScale := fs.Uint("qr-scale", 8, "PNG pixels per QR module")
+	emitQR := fs.Bool("qr", false, "also render each frame as a QR code PNG")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
 	if err := fs.Parse(args); err != nil {
 		return &exitError{code: ExitUsage, err: err}
@@ -300,6 +305,15 @@ func runSend(env Env, args []string) error {
 		name := filepath.Join(*outDir, fmt.Sprintf("frame-%06d.bin", i))
 		if err := os.WriteFile(name, frame, 0o644); err != nil {
 			return failf(ExitInput, "writing %s: %w", name, err)
+		}
+	}
+
+	if *emitQR {
+		if len(*qrEcc) != 1 {
+			return failf(ExitUsage, "-qr-ecc must be a single letter L, M, Q, or H")
+		}
+		if err := renderFrames(frames, *outDir, int(*qrVersion), (*qrEcc)[0], int(*qrScale)); err != nil {
+			return err
 		}
 	}
 
@@ -616,5 +630,37 @@ func decodeHexInto(dst []byte, s, field string) error {
 		return failf(ExitInput, "%s must be %d bytes, got %d", field, len(dst), len(raw))
 	}
 	copy(dst, raw)
+	return nil
+}
+
+// renderFrames writes each frame as a QR code PNG beside its binary form.
+//
+// Rendering is a separate step from framing so a failure here cannot corrupt
+// the frame stream that has already been written: the transfer stays valid
+// even if the operator's chosen QR version turns out to be too small.
+func renderFrames(frames [][]byte, outDir string, version int, ecc byte, scale int) error {
+	for i, frame := range frames {
+		qr, err := ffi.EncodeQR(frame, version, ecc)
+		if err != nil {
+			// A frame that does not fit is a configuration error the operator
+			// can act on, so name the size rather than just failing.
+			return failf(ExitUsage,
+				"frame %d (%d bytes) will not fit a QR code at version %d level %c: %w",
+				i, len(frame), version, ecc, err)
+		}
+
+		name := filepath.Join(outDir, fmt.Sprintf("frame-%06d.png", i))
+		f, err := os.Create(name)
+		if err != nil {
+			return failf(ExitInput, "creating %s: %w", name, err)
+		}
+		if err := render.PNG(f, qr, scale); err != nil {
+			_ = f.Close()
+			return failf(ExitInternal, "rendering %s: %w", name, err)
+		}
+		if err := f.Close(); err != nil {
+			return failf(ExitInput, "closing %s: %w", name, err)
+		}
+	}
 	return nil
 }

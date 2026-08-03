@@ -550,3 +550,90 @@ func (d *Decoder) Close() {
 	C.dhow_decoder_free(d.ptr)
 	d.ptr = nil
 }
+
+// QRCode is one frame rendered as a QR module grid.
+//
+// Modules is one byte per module, row-major, 1 for dark, so the grid is
+// Size*Size bytes.
+type QRCode struct {
+	// Size is the number of modules per side.
+	Size int
+	// Modules holds the grid, row-major, 1 for dark.
+	Modules []byte
+}
+
+// Dark reports whether the module at (x, y) is dark.
+//
+// Coordinates outside the grid read as light, so a renderer walking a quiet
+// zone needs no bounds check.
+func (q *QRCode) Dark(x, y int) bool {
+	if x < 0 || y < 0 || x >= q.Size || y >= q.Size {
+		return false
+	}
+	return q.Modules[y*q.Size+x] == 1
+}
+
+// QRCapacity reports how many bytes one QR code holds at a version and level.
+//
+// ecc is 'L', 'M', 'Q', or 'H'.
+func QRCapacity(version int, ecc byte) (int, error) {
+	n := C.dhow_qr_capacity(C.uint8_t(version), C.char(ecc))
+	if n < 0 {
+		return 0, wrap(Status(n))
+	}
+	return int(n), nil
+}
+
+// QRMaxSymbolSize reports the largest codec symbol size that fits one QR code.
+//
+// Returns 0 when the version is too small to hold even a frame header. A
+// caller uses this to choose a symbol size the optical layer can carry, rather
+// than picking one and discovering at render time that frames do not fit.
+func QRMaxSymbolSize(version int, ecc byte) (int, error) {
+	n := C.dhow_qr_max_symbol_size(C.uint8_t(version), C.char(ecc))
+	if n < 0 {
+		return 0, wrap(Status(n))
+	}
+	return int(n), nil
+}
+
+// EncodeQR renders one frame as a QR code.
+//
+// Pass version 0 to let the encoder choose the smallest version that fits.
+func EncodeQR(frame []byte, version int, ecc byte) (*QRCode, error) {
+	if len(frame) == 0 {
+		return nil, errors.New("dhow: cannot encode an empty frame")
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	framePtr := (*C.uint8_t)(unsafe.Pointer(&frame[0]))
+
+	var size C.uint32_t
+	var needed C.size_t
+	st := Status(C.dhow_qr_encode_frame(
+		framePtr, C.size_t(len(frame)),
+		C.uint8_t(version), C.char(ecc),
+		nil, 0, &size, &needed,
+	))
+	if st != StatusOK {
+		return nil, wrap(st)
+	}
+
+	modules := make([]byte, int(needed))
+	var written C.size_t
+	st = Status(C.dhow_qr_encode_frame(
+		framePtr, C.size_t(len(frame)),
+		C.uint8_t(version), C.char(ecc),
+		(*C.uint8_t)(unsafe.Pointer(&modules[0])), C.size_t(len(modules)),
+		&size, &written,
+	))
+	runtime.KeepAlive(frame)
+	runtime.KeepAlive(modules)
+	if st != StatusOK {
+		return nil, wrap(st)
+	}
+
+	return &QRCode{Size: int(size), Modules: modules[:int(written)]}, nil
+}

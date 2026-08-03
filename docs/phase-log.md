@@ -1,5 +1,76 @@
 # Phase Log
 
+## Phase 21 - QR frame encoding
+
+**Objective:** Pack wire frames into QR codes with configurable version and
+error-correction level, derive the capacity table by measurement rather than
+guesswork, and render frames to a terminal and to PNG. Frame-to-QR is 1:1 and
+deterministic.
+
+**Gates:** encode/decode identity through the module grid; capacity table
+committed with its generation script; rendering deterministic; every capacity
+boundary exact in both directions.
+
+### Design notes
+
+Capacity is measured by binary searching the real encoder rather than derived
+from the specification's codeword arithmetic. A hand-transcribed table that is
+optimistic by one byte fails only for frames that fill a version exactly, which
+is the worst kind of intermittent bug. A test asserts that at every sampled
+version and level, exactly `capacity` bytes encode and `capacity + 1` does not.
+
+Pinning the QR version is not merely a preference. A stream whose frames
+changed size mid-transfer would force the receiver to re-acquire focus and
+framing on every change, so `encode_at` fixes the version and also disables
+qrcodegen's automatic error-correction boost, which would otherwise move a
+frame away from the level the operator chose.
+
+Rendering takes a scale in pixels per module rather than a target image size,
+because the operator's real constraint is how large a module appears on screen,
+which is what decides whether a capture works at a given distance. PNG output
+is a two-entry paletted image so no anti-aliasing or colour management step can
+soften a module edge.
+
+QR encoding stays in Rust and crosses the ABI as a module grid. Reusing the
+audited `qrcodegen` avoids adding a second QR implementation to the dependency
+tree, and passing one byte per module in a single buffer costs one allocation
+per frame instead of tens of thousands of boundary crossings.
+
+### Verified by hand
+
+```
+$ dhow send -key operator.key -in data -out qrframes -qr -qr-version 20 -qr-scale 6
+frames    35
+$ file qrframes/frame-000000.png
+PNG image data, 630 x 630, 1-bit colormap, non-interlaced
+$ dhow recv -key operator.key -in qrframes -out r2 && diff -r data r2
+# identical
+```
+
+630 = (97 modules + 8 quiet-zone modules) x 6 pixels, as intended.
+
+### Not covered
+
+The rendered PNGs are not yet decoded back through a QR *reader*; that is
+Phase 25 (QR detection and extraction), which needs a decoder the project does
+not have yet. What is proved here is that the module grid round-trips and that
+the rendering is faithful to it, not that a camera can read the result.
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+  Passed: 12
+  Failed: 0
+ALL GATES PASSED
+```
+
+```
+$ cargo test -p dhow-codec --lib qr     25 passed
+$ go test ./cli/internal/render/        ok
+```
+
+
 ## Phase 20 - CLI surface and dataset packaging
 
 **Objective:** Make `dhow` a runnable binary. Implement `keygen`, `send`,
