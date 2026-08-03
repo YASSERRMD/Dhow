@@ -59,6 +59,31 @@ rand() {
     RAND_VALUE=$(( RAND_STATE % $1 ))
 }
 
+# bytes writes $1 deterministic pseudo-random bytes derived from the label $2.
+#
+# Not /dev/urandom. The seed has to reproduce the *whole* round, dataset bytes
+# included, or a failure that depends on the data cannot be replayed - which is
+# not hypothetical: the first long soak of this harness found a real failure
+# that a re-run on the same seed did not reproduce, because the data was drawn
+# from /dev/urandom and only the parameters came from the seed.
+#
+# An AES-CTR keystream over zeroes is deterministic given the passphrase, and
+# openssl is present wherever this runs.
+bytes() {
+    local count="$1" label="$2"
+    if [ "$count" -eq 0 ]; then
+        return 0
+    fi
+    # pipefail is disabled inside the subshell on purpose: head closes the
+    # pipe, openssl takes SIGPIPE, and pipefail would report that as a failed
+    # pipeline. It is the expected way for an endless stream to end.
+    (
+        set +o pipefail
+        openssl enc -aes-256-ctr -pass "pass:${label}" -nosalt -in /dev/zero 2>/dev/null \
+            | head -c "$count"
+    )
+}
+
 # pick sets PICK_VALUE to one of its arguments, for the same reason.
 PICK_VALUE=""
 pick() {
@@ -105,7 +130,7 @@ for round in $(seq 1 "$ROUNDS"); do
     # Sizes straddle the boundaries that matter: smaller than one symbol, an
     # exact multiple, and larger than one block.
     rand 200000; SIZE=$RAND_VALUE
-    head -c "$SIZE" /dev/urandom > "$R/data/blob.bin"
+    bytes "$SIZE" "${SEED}-${round}-blob" > "$R/data/blob.bin"
     printf 'round %s\n' "$round" > "$R/data/nested/note.txt"
     : > "$R/data/empty.txt"
     rand 2
@@ -262,8 +287,13 @@ for round in $(seq 1 "$ROUNDS"); do
             # whole harness exists to find.
             diff -r "$R/data" "$R/received" >/dev/null \
                 || fail "round ${round}: SILENT CORRUPTION - recv succeeded but the dataset differs (${DESC})"
-            "$DHOW" verify -in "$R/frames" -dir "$R/received" >/dev/null 2>&1 \
-                || fail "round ${round}: recv succeeded but verify rejected the dataset (${DESC})"
+            # The verify output is captured, not discarded. A harness that
+            # reports "verify rejected the dataset" without saying which file
+            # and why has found a defect and thrown away the evidence.
+            if ! "$DHOW" verify -in "$R/frames" -dir "$R/received" -json > "$R/verify.json" 2>&1; then
+                fail "round ${round}: recv succeeded but verify rejected the dataset (${DESC})
+$(cat "$R/verify.json")"
+            fi
             if [ -f "$R/data/run.sh" ] && [ ! -x "$R/received/run.sh" ]; then
                 fail "round ${round}: the executable bit was lost (${DESC})"
             fi
