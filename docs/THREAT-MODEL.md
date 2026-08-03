@@ -59,14 +59,32 @@ An attacker records a previous transfer and replays it to the receiver.
 - Manifest is signed; a replayed manifest must have been signed by the legitimate operator key.
 - Receiver must verify the manifest signature before accepting any data.
 
-### 4. Tampered resume files
+### 4. Tampered resume state
 
-An attacker modifies the receiver's resume state file to corrupt reassembly.
+An attacker with write access to the receiver's state directory modifies the
+saved progress - the journal of accepted frames, the index over it, or both -
+to poison the reassembly that follows a restart.
 
 **Controls:**
-- Resume state is serialized with an integrity digest (BLAKE3).
-- Tampered resume files are rejected with a typed error, not trusted.
-- Resume state does not contain secret material.
+- Every frame replayed from the journal is re-authenticated against the session
+  key: MAC, CRC, session binding, and symbol bounds, exactly as on first
+  capture. This is the control that matters. The state directory holds no key
+  material, so an attacker who can rewrite these files still cannot produce a
+  frame the decoder will accept.
+- The index carries a CRC32C and a BLAKE3 integrity digest, and is rejected on
+  any mismatch. These catch corruption, not forgery: an attacker who can
+  rewrite the file can recompute both.
+- The index is bound to the journal by a digest over the accepted frames in
+  acceptance order, and by the journal length it covers. A journal that is
+  truncated, reordered, extended, or substituted no longer reproduces it.
+- The index names its own session, and a state belonging to another transfer is
+  refused before any replay begins.
+- Every one of these failures is fail-closed: the receiver stops and tells the
+  operator to discard the state, rather than resuming from whatever survived.
+
+**Residual risk:** an attacker with write access to the state directory can
+delete it, costing the operator the frames captured so far. There is no defence
+against that at this layer, and the cost is bounded by re-running the capture.
 
 ### 5. Malicious datasets (zip bombs, path traversal)
 
@@ -114,7 +132,10 @@ An attacker with write access to the receiver's storage may:
 | 15 | No network calls in data path | Enforced (no deps with sockets) |
 | 16 | File names sanitized against traversal | Planned (Phase 29) |
 | 17 | Zip-bomb limits | Planned (Phase 29) |
-| 18 | Resume state integrity digest | Planned (Phase 12) |
+| 18 | Resume state integrity digest | Done (Phase 12) |
+| 18a | Replayed journal frames re-authenticated | Done (Phase 24) |
+| 18b | Resume index bound to its journal by digest and length | Done (Phase 24) |
+| 18c | Resume state from a foreign session refused | Done (Phase 24) |
 | 19 | Deterministic archive | Planned (Phase 29) |
 | 20 | `dhow verify` for post-transfer verification | Planned (Phase 30) |
 | 21 | Gate bites test (deliberate lint error caught) | Done (Phase 2) |
