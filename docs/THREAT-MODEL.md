@@ -111,12 +111,48 @@ An attacker with write access to the receiver's storage may:
 - `dhow verify` re-checks all file digests against the signed manifest.
 - Manifest signature must verify; any tampering is detected.
 
+**Residual risk: the trust anchor is a file on that storage.** `verify` checks
+the signature against the `sender.pub` it is handed. An attacker who can
+rewrite the dataset *and* substitute that file verifies successfully against a
+key they hold. Nothing in the tool can close this; the control is the operator
+comparing the fingerprint out of band when the key first arrives, and keeping
+the key somewhere the dataset's own storage cannot reach. See
+[VERIFY.md](VERIFY.md).
+
+## What the manifest signature covers
+
+Since the manifest was wired through the CLI (Phase 28), a receiver reads
+*nothing* out of a transfer before checking its signature. The signed structure
+carries:
+
+| Field | Why it is signed |
+|-------|------------------|
+| File inventory: names, sizes, digests, executable bits | Signing only the fixed header would let an attacker rewrite an entry to a traversal path without disturbing the signature. |
+| Payload digest | Binds the manifest to the bytes that were encoded. |
+| Session id | With the binding check, stops a correctly signed manifest from an earlier transfer between the same operators being replayed into this one. |
+| Salt and nonce | Public by design, but public is not the same as unauthenticated. Under the unsigned record a substituted nonce produced a decryption failure — fail-closed, but reporting the wrong cause. |
+| Coding parameters | Inputs to the transfer. An input nobody signed is an input an attacker can choose. |
+
+The two keys answer different questions and neither substitutes for the other:
+
+- The **operator key** is symmetric and held by both sides. It answers "was
+  this produced by someone in the group", and cannot answer "which one",
+  because either side could have produced any transfer made with it.
+- The **identity key** is held only by the sender. It answers "which one".
+
+A deployment that skips the identity and relies on the operator key alone has a
+receiver that cannot distinguish a transfer the sender made from one the
+receiver made, which matters as soon as more than two machines hold the key.
+
 ## Security Requirements Checklist
 
 | # | Requirement | Status |
 |---|-------------|--------|
 | 1 | Payload encrypted before encoding (XChaCha20-Poly1305) | Planned (Phase 14) |
-| 2 | Manifest signed with Ed25519 | Planned (Phase 15) |
+| 2 | Manifest signed with Ed25519 | Done (Phase 15), reachable from the CLI (Phase 28) |
+| 2a | `recv` and `verify` reject an unverifiable manifest before reading any field from it | Done (Phase 28) |
+| 2b | Salt, nonce, and coding parameters carried inside the signature | Done (Phase 28) |
+| 2c | Identity secret never crosses the FFI boundary | Done (Phase 28) |
 | 3 | Per-frame CRC32C for fast reject | Planned (Phase 7) |
 | 4 | Per-block BLAKE3 for decode verification | Planned (Phase 6) |
 | 5 | Whole-payload BLAKE3 in signed manifest | Planned (Phase 6) |
@@ -140,6 +176,12 @@ An attacker with write access to the receiver's storage may:
 | 20 | `dhow verify` for post-transfer verification | Planned (Phase 30) |
 | 21 | Gate bites test (deliberate lint error caught) | Done (Phase 2) |
 | 22 | Threat model reviewed against section 3 checklist | Done (Phase 2) |
+
+> **The statuses in this table have not been audited since Phase 2 except where
+> a later phase edited a row.** Several rows still say "Planned" for work that
+> has shipped. Phase 32 builds the traceability table that maps every item to an
+> enforcing test or gate; until then, treat a "Planned" here as "not confirmed
+> by this document" rather than as evidence the control is absent.
 
 ## Open Questions
 
