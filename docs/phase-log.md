@@ -95,7 +95,11 @@ That was a real gap in the harness's central promise, and it is fixed: content
 now comes from an AES-CTR keystream keyed by the seed and the round. The fix
 cannot recover the bytes that triggered the original failure.
 
-Four further soaks of sixty rounds each have not reproduced it.
+Four further soaks of sixty rounds each, on seeds 7919, 15838, 23757, and
+31676, have not reproduced it. That is 240 rounds with the seeded-data
+harness, none of which failed and none of which reported corruption. Absence
+over 240 rounds is weak evidence about a failure seen once in 120; it is not
+grounds for closing the item.
 
 It is recorded as `B-1` in `docs/BACKLOG.md` with what is known: `diff` does
 not compare permissions, so a lost executable bit produces exactly this
@@ -114,11 +118,12 @@ harness into a dozen commits would have been padding rather than
 decomposition. Recording the shortfall as the git procedure requires.
 
 The pack's Phase 38 gate calls for 100 consecutive transfers with randomised
-faults. The soak run for this phase was 120 rounds plus four further runs of
-sixty, which is 360 in total; the gate runs twelve on a fixed seed, because a
-gate's job is to confirm the harness still works, not to search. Searching is
-`scripts/chaos.sh 500` with a fresh seed, and `CONTRIBUTING.md` says when to
-do it.
+faults. The soak for this phase was 120 rounds plus four runs of sixty, 360 in
+total, all of which passed with zero silent corruption. The gate itself runs
+twelve on a fixed seed, because a gate's job is to confirm the harness still
+works, not to search; CI runs forty on a seed that varies by run number.
+Searching in earnest is `scripts/chaos.sh 500` on a fresh seed, and
+`CONTRIBUTING.md` says when to do it.
 
 ### Soak output
 
@@ -129,12 +134,23 @@ $ scripts/chaos.sh 120 20260803
   closed     49
   corrupted  0
 
-$ scripts/chaos.sh 60 7919
+$ scripts/chaos.sh 60 7919      # and 15838, 23757, 31676
   rounds     60
   completed  33
   closed     27
   corrupted  0
 ```
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+  Passed: 15
+  Failed: 0
+ALL GATES PASSED
+```
+
+The gate grows to fifteen checks with the chaos soak.
 
 
 ## Phase 26 - Operator UX and the operations guide
