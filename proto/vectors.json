@@ -70,22 +70,23 @@
       }
     },
     {
-      "name": "resume_header_v1",
-      "description": "Golden vector for resume file header v1",
+      "name": "resume_header_v2",
+      "description": "Golden vector for resume file header v2",
       "inputs": {
         "magic": "DHRS",
-        "version": 1,
+        "version": 2,
         "reserved": 0,
         "session_id": "000102030405060708090a0b0c0d0e0f",
         "block_count": 4,
-        "reserved2": "0000000000000000000000000000000000000000000000000000000000000000",
-        "integrity_digest": "a7eb0f74c84f8895866e84650e3fd5ee8c2d9160ac770cdb31a0b2a86c5eb076"
+        "journal_bytes": 10000,
+        "journal_digest": "84453a29cc9e0c43ee618c5ce19982caf875a0ce4fb361b1fa22d13910ffd505",
+        "reserved2": "000000000000000000000000000000000000000000000000"
       },
       "outputs": {
-        "header_hex": "4448525301000000000102030405060708090a0b0c0d0e0f0400000000000000000000000000000000000000000000000000000000000000000000009c7a1549a7eb0f74c84f8895866e84650e3fd5ee8c2d9160ac770cdb31a0b2a86c5eb076",
-        "header_size": 96,
-        "crc32c": 1226144412,
-        "integrity_digest": "a7eb0f74c84f8895866e84650e3fd5ee8c2d9160ac770cdb31a0b2a86c5eb076"
+        "header_hex": "4448525302000000000102030405060708090a0b0c0d0e0f04000000102700000000000084453a29cc9e0c43ee618c5ce19982caf875a0ce4fb361b1fa22d13910ffd505000000000000000000000000000000000000000000000000cc06da31e4e127d8e120770725839a2d0b497793b7f43d8610ac58d24b100d31d0b71ef5",
+        "header_size": 128,
+        "crc32c": 836372172,
+        "integrity_digest": "e4e127d8e120770725839a2d0b497793b7f43d8610ac58d24b100d31d0b71ef5"
       }
     },
     {
@@ -103,17 +104,17 @@
       }
     },
     {
-      "name": "resume_block_entry_v1",
-      "description": "Golden vector for resume block entry v1",
+      "name": "resume_block_entry_v2",
+      "description": "Golden vector for resume block entry v2",
       "inputs": {
         "block_index": 1,
         "symbol_count": 20,
         "symbols_held": 16,
-        "bitmap": "ffff0000"
+        "bitmap": "ffff00"
       },
       "outputs": {
-        "entry_hex": "010000001400000010000000ffff0000",
-        "entry_size": 16
+        "entry_hex": "010000001400000010000000ffff00",
+        "entry_size": 15
       }
     },
     {
@@ -147,45 +148,47 @@
       }
     },
     {
-      "name": "full_resume_v1",
-      "description": "Golden vector for full resume file with block entries v1",
+      "name": "full_resume_v2",
+      "description": "Golden vector for full resume file with block entries v2",
       "inputs": {
         "magic": "DHRS",
-        "version": 1,
+        "version": 2,
         "session_id": "000102030405060708090a0b0c0d0e0f",
         "block_count": 4,
+        "journal_bytes": 10000,
+        "journal_digest": "84453a29cc9e0c43ee618c5ce19982caf875a0ce4fb361b1fa22d13910ffd505",
         "block_entries": [
           {
             "block_index": 0,
             "symbol_count": 20,
             "symbols_held": 16,
-            "bitmap": "ffff"
+            "bitmap": "ffff00"
           },
           {
             "block_index": 1,
             "symbol_count": 20,
             "symbols_held": 16,
-            "bitmap": "ffff"
+            "bitmap": "ffff00"
           },
           {
             "block_index": 2,
             "symbol_count": 20,
             "symbols_held": 0,
-            "bitmap": "0000"
+            "bitmap": "000000"
           },
           {
             "block_index": 3,
             "symbol_count": 20,
             "symbols_held": 0,
-            "bitmap": "0000"
+            "bitmap": "000000"
           }
         ]
       },
       "outputs": {
-        "resume_hex": "4448525301000000000102030405060708090a0b0c0d0e0f0400000000000000000000000000000000000000000000000000000000000000000000009c7a1549a7eb0f74c84f8895866e84650e3fd5ee8c2d9160ac770cdb31a0b2a86c5eb076000000001400000010000000ffff0000010000001400000010000000ffff00000200000014000000000000000000000003000000140000000000000000000000",
-        "resume_size": 160,
-        "crc32c": 1226144412,
-        "integrity_digest": "a7eb0f74c84f8895866e84650e3fd5ee8c2d9160ac770cdb31a0b2a86c5eb076"
+        "resume_hex": "4448525302000000000102030405060708090a0b0c0d0e0f04000000102700000000000084453a29cc9e0c43ee618c5ce19982caf875a0ce4fb361b1fa22d13910ffd505000000000000000000000000000000000000000000000000cc06da31e4e127d8e120770725839a2d0b497793b7f43d8610ac58d24b100d31d0b71ef5000000001400000010000000ffff00010000001400000010000000ffff00020000001400000000000000000000030000001400000000000000000000",
+        "resume_size": 188,
+        "crc32c": 836372172,
+        "integrity_digest": "e4e127d8e120770725839a2d0b497793b7f43d8610ac58d24b100d31d0b71ef5"
       }
     },
     {

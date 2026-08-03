@@ -35,16 +35,21 @@ def check_magic(data, vector_name, expected_magic):
     return []
 
 
-def check_version(data, vector_name):
-    """Check that the version byte is 0x01."""
+def check_version(data, vector_name, expected):
+    """Check the version byte against the version this format is at.
+
+    Formats version independently, so the expected byte is per-vector rather
+    than a constant. Pinning it to 0x01 for everything would mean a format
+    could be bumped without the conformance suite noticing.
+    """
     hex_str = data["outputs"].get("header_hex") or data["outputs"].get("manifest_hex") or data["outputs"].get("resume_hex") or data["outputs"].get("entry_hex")
     if not hex_str:
         return [f"  {vector_name}: no hex output found"]
 
     # Version is at offset 4 (after 4-byte magic)
     version_hex = hex_str[8:10]
-    if version_hex != "01":
-        return [f"  {vector_name}: version mismatch - expected 0x01, got 0x{version_hex}"]
+    if version_hex != f"{expected:02x}":
+        return [f"  {vector_name}: version mismatch - expected 0x{expected:02x}, got 0x{version_hex}"]
 
     return []
 
@@ -87,9 +92,9 @@ def main():
             "frame_header_v1": "DHOW",
             "session_header_v1": "DSES",
             "manifest_header_v1": "DHMF",
-            "resume_header_v1": "DHRS",
+            "resume_header_v2": "DHRS",
             "full_manifest_v1": "DHMF",
-            "full_resume_v1": "DHRS",
+            "full_resume_v2": "DHRS",
         }
 
         if name in magic_map:
@@ -97,7 +102,15 @@ def main():
             all_errors.extend(errors)
 
             # Check version
-            errors = check_version(vector, name)
+            version_map = {
+                "frame_header_v1": 1,
+                "session_header_v1": 1,
+                "manifest_header_v1": 1,
+                "resume_header_v2": 2,
+                "full_manifest_v1": 1,
+                "full_resume_v2": 2,
+            }
+            errors = check_version(vector, name, version_map[name])
             all_errors.extend(errors)
 
             # Check reserved fields are zero
@@ -105,17 +118,18 @@ def main():
             # Session header: reserved at offset 5, length 3
             # Manifest header: reserved at offset 5, length 3
             # Resume header: reserved at offset 5, length 3
+            # Resume v2 has a second reserved field at offset 68, so the map
+            # holds every reserved span rather than only the first.
             reserved_map = {
-                "frame_header_v1": (6, 2),
-                "session_header_v1": (5, 3),
-                "manifest_header_v1": (5, 3),
-                "resume_header_v1": (5, 3),
-                "full_manifest_v1": (5, 3),
-                "full_resume_v1": (5, 3),
+                "frame_header_v1": [(6, 2)],
+                "session_header_v1": [(5, 3)],
+                "manifest_header_v1": [(5, 3)],
+                "resume_header_v2": [(5, 3), (68, 24)],
+                "full_manifest_v1": [(5, 3)],
+                "full_resume_v2": [(5, 3), (68, 24)],
             }
 
-            if name in reserved_map:
-                offset, length = reserved_map[name]
+            for offset, length in reserved_map.get(name, []):
                 errors = check_reserved_zero(vector, name, offset, length)
                 all_errors.extend(errors)
 
