@@ -1,5 +1,22 @@
 # Phase Log
 
+## Phase 29 - Fuzzing the parsers
+
+**Objective:** B-4 has been open since Phase 2 with the note "specified and not
+built", blocked on a toolchain question nobody had answered: `cargo-fuzz`
+requires nightly Rust, `rust-toolchain.toml` pins stable, and `cargo-fuzz` was
+not installed. This phase answers the question, records the answer, and then
+builds what B-4 describes - `cargo-fuzz` targets for frame decode, manifest
+verify, and resume load, seeded from `proto/vectors.json`, with a bounded pass
+wired into the gate.
+
+**Gates:** every target builds and runs; the corpus is derived from the golden
+vectors rather than from nothing; a deliberately-broken parser is caught by its
+target, so the targets are shown to bite; findings, if any, are fixed with
+regression tests. The phase pack asks for 24 cumulative CPU-hours of fuzzing,
+which is not something this session can produce - the log records the time
+actually run and says so rather than claiming the number.
+
 ## Phase 28 - Wire the signed manifest through the CLI
 
 **Objective:** `dhow-crypt` has implemented manifest signing, verification,
