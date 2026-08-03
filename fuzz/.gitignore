@@ -1,0 +1,6 @@
+# Corpora and crash artifacts are generated, not authored.
+corpus/
+artifacts/
+coverage/
+target/
+Cargo.lock
