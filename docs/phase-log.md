@@ -1,5 +1,23 @@
 # Phase Log
 
+## Phase 31 - Benchmarks and a memory budget
+
+**Objective:** nothing in this tree measures how fast anything is or how much
+memory it takes. That is tolerable while correctness is the only question and
+stops being tolerable at a release, because a receiver that needs a gigabyte of
+resident memory to take a gigabyte dataset is one that fails on the hardware it
+was built for - a machine deliberately kept off every network, which is rarely
+the newest one in the building. This phase establishes benchmarks with
+committed baselines and a peak-RSS budget that a test enforces rather than a
+document asserts.
+
+**Gates:** criterion benchmarks for the Rust data path and `go test -bench` for
+the Go side; a peak-RSS measurement that fails when the budget is exceeded;
+baselines committed so a regression is visible as a number rather than as a
+feeling. B-6 already records that `send` builds the whole archive in memory,
+which is the first thing a budget will hit - the phase either fixes it or
+records what the measurement actually shows.
+
 ## Phase 30 - Property and differential testing
 
 **Objective:** the property tests in this tree are uneven. `dhow-codec` has had
