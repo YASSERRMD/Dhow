@@ -16,6 +16,7 @@
 use crate::error::{DhowStatus, clear_last_error, fail};
 use crate::guard::{guard, guard_ptr};
 use dhow_codec::blake3::{Blake3Hasher, blake3_digest};
+use dhow_codec::manifest::{FileEntry, Manifest, ManifestHeader, validate_name};
 use dhow_codec::pipeline::{Pipeline, PipelineDecoder};
 use dhow_codec::qr::{
     Ecc, QrCodeEncoder, capacity as qr_capacity, max_symbol_size as qr_max_symbol_size,
@@ -28,6 +29,7 @@ use dhow_crypt::key::{
     IdentityKey, OperatorKey, PublicIdentity, load_identity, load_operator, load_public,
     save_identity, save_operator, save_public,
 };
+use dhow_crypt::manifest::{Policy as ManifestPolicy, sign_manifest, verify_manifest_with};
 use std::os::raw::{c_char, c_int};
 use std::path::PathBuf;
 
@@ -1292,4 +1294,545 @@ pub unsafe extern "C" fn dhow_public_free(public: *mut DhowPublicIdentity) {
     // SAFETY: the caller guarantees `public` came from `Box::into_raw` here and
     // has not already been freed.
     drop(unsafe { Box::from_raw(public) });
+}
+
+// --- Manifests ---
+
+/// One file's inventory entry as it crosses the ABI.
+///
+/// The awkward part of this boundary is that a manifest's inventory is
+/// variable-length in two dimensions: a variable number of entries, each with a
+/// variable-length name. Going in, the caller composes an array of these and
+/// passes a pointer and a count; the names are borrowed for the duration of the
+/// call and nothing here retains them.
+///
+/// Coming out, there is no array: a verified manifest is a handle and its
+/// entries are read one at a time through the indexed accessors below. Handing
+/// back an array would mean handing back allocations the caller must free with
+/// an allocator it does not own, which is the one thing this ABI never does.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct DhowFileEntry {
+    /// NUL-terminated UTF-8 name, relative and `/`-separated.
+    pub name: *const c_char,
+    /// File size in bytes.
+    pub size: u64,
+    /// BLAKE3 digest of the file's contents.
+    pub digest: [u8; 32],
+    /// Non-zero if the owner execute bit was set.
+    pub executable: u8,
+    /// Reserved; must be zero. Present so the struct's size and alignment do
+    /// not change when a future flag is added.
+    pub reserved: [u8; 7],
+}
+
+/// An opaque manifest.
+///
+/// A handle of this type is only ever produced by building one from an identity
+/// or by verifying one against a public identity, so possession of the handle
+/// means the signature was checked. There is no way to obtain one by parsing
+/// alone.
+pub struct DhowManifest {
+    manifest: Manifest,
+    bytes: Vec<u8>,
+}
+
+/// Reads a caller-supplied entry array into codec entries.
+///
+/// # Safety
+///
+/// `entries` must point to `count` readable `DhowFileEntry` values, each with a
+/// NUL-terminated `name`.
+unsafe fn entries_from(
+    entries: *const DhowFileEntry,
+    count: usize,
+) -> Result<Vec<FileEntry>, String> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if entries.is_null() {
+        return Err("file entry array was null".to_string());
+    }
+    // SAFETY: the caller guarantees `count` readable entries at `entries`.
+    let raw = unsafe { std::slice::from_raw_parts(entries, count) };
+
+    let mut out = Vec::with_capacity(count);
+    for (i, entry) in raw.iter().enumerate() {
+        if entry.name.is_null() {
+            return Err(format!("file entry {i} had a null name"));
+        }
+        if entry.reserved != [0u8; 7] {
+            return Err(format!("file entry {i} set a reserved byte"));
+        }
+        // SAFETY: the caller guarantees `name` is NUL-terminated.
+        let name = unsafe { std::ffi::CStr::from_ptr(entry.name) }
+            .to_str()
+            .map_err(|_| format!("file entry {i} had a name that is not valid UTF-8"))?;
+
+        // Names are checked on the way in as well as on the way out. Signing
+        // something is not the same as it being safe to extract, and a sender
+        // that would have produced a traversal name should learn it here rather
+        // than have the receiver refuse a manifest the sender believes is fine.
+        validate_name(name).map_err(|e| format!("file entry {i}: {e}"))?;
+
+        out.push(FileEntry::with_mode(
+            name,
+            entry.size,
+            entry.digest,
+            entry.executable != 0,
+        ));
+    }
+    Ok(out)
+}
+
+/// Builds and signs a manifest.
+///
+/// The payload digest and payload size come from `params`, so the manifest
+/// cannot describe a payload the session does not. The total size is summed
+/// from the entries rather than taken from the caller: a sender has no reason
+/// to declare a total that disagrees with its own inventory, and the receiver's
+/// policy check rejects one that does.
+///
+/// Returns null on failure.
+///
+/// # Safety
+///
+/// `identity` must be a live handle; `session_id`, `salt`, and `nonce` must
+/// point to 16, 32, and 24 readable bytes; `entries` must point to `count`
+/// readable entries with NUL-terminated names.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_manifest_build(
+    identity: *const DhowIdentity,
+    session_id: *const u8,
+    salt: *const u8,
+    nonce: *const u8,
+    params: DhowSessionParams,
+    entries: *const DhowFileEntry,
+    count: usize,
+) -> *mut DhowManifest {
+    guard_ptr(|| {
+        clear_last_error();
+        if identity.is_null() {
+            crate::error::set_last_error("identity handle was null");
+            return std::ptr::null_mut();
+        }
+        // SAFETY: forwarded from this function's own contract.
+        let (Some(session_id), Some(salt), Some(nonce)) = (unsafe {
+            (
+                slice_from(session_id, 16),
+                slice_from(salt, 32),
+                slice_from(nonce, 24),
+            )
+        }) else {
+            crate::error::set_last_error("session id, salt, or nonce pointer was null");
+            return std::ptr::null_mut();
+        };
+
+        // SAFETY: forwarded from this function's own contract.
+        let entries = match unsafe { entries_from(entries, count) } {
+            Ok(entries) => entries,
+            Err(e) => {
+                crate::error::set_last_error(e);
+                return std::ptr::null_mut();
+            }
+        };
+
+        let total_size: u64 = entries.iter().map(|e| e.size).sum();
+
+        let header = ManifestHeader::new(
+            session_id.try_into().unwrap_or([0u8; 16]),
+            &entries,
+            total_size,
+            salt.try_into().unwrap_or([0u8; 32]),
+            nonce.try_into().unwrap_or([0u8; 24]),
+            params.to_session_params(),
+        );
+        let unsigned = Manifest::build(&header, &entries, &[0u8; 64]);
+
+        // SAFETY: `identity` is non-null and the caller guarantees it is live.
+        let identity = unsafe { &*identity };
+        let bytes = sign_manifest(&identity.inner, &unsigned);
+
+        // Parse the signed bytes back rather than reusing the unsigned
+        // structure: the handle must describe exactly what was serialized, and
+        // this is the cheapest way to be sure it does.
+        match Manifest::from_bytes(&bytes) {
+            Ok(manifest) => Box::into_raw(Box::new(DhowManifest { manifest, bytes })),
+            Err(e) => {
+                crate::error::set_last_error(format!("signed manifest did not parse back: {e}"));
+                std::ptr::null_mut()
+            }
+        }
+    })
+}
+
+/// Verifies a manifest against a public identity.
+///
+/// `session_id` may be null, meaning the caller has nothing to bind the
+/// manifest to yet - the ordinary case for a receiver meeting a transfer for
+/// the first time, where the manifest is what tells it which session this is.
+/// When it is non-null, a correctly signed manifest from a different transfer
+/// between the same operators is rejected.
+///
+/// Returns null on failure, with the reason available from
+/// `dhow_last_error_message`.
+///
+/// # Safety
+///
+/// `public` must be a live handle; `bytes` must point to `len` readable bytes;
+/// `session_id` must be null or point to 16 readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_manifest_verify(
+    public: *const DhowPublicIdentity,
+    bytes: *const u8,
+    len: usize,
+    session_id: *const u8,
+) -> *mut DhowManifest {
+    guard_ptr(|| {
+        clear_last_error();
+        if public.is_null() {
+            crate::error::set_last_error("public identity handle was null");
+            return std::ptr::null_mut();
+        }
+        // SAFETY: forwarded from this function's own contract.
+        let Some(bytes) = (unsafe { slice_from(bytes, len) }) else {
+            crate::error::set_last_error("manifest pointer was null");
+            return std::ptr::null_mut();
+        };
+
+        let expected: Option<[u8; 16]> = if session_id.is_null() {
+            None
+        } else {
+            // SAFETY: forwarded from this function's own contract.
+            match unsafe { slice_from(session_id, 16) }.and_then(|s| s.try_into().ok()) {
+                Some(id) => Some(id),
+                None => {
+                    crate::error::set_last_error("session id was not 16 readable bytes");
+                    return std::ptr::null_mut();
+                }
+            }
+        };
+
+        // SAFETY: `public` is non-null and the caller guarantees it is live.
+        let public = unsafe { &*public };
+
+        match verify_manifest_with(
+            &public.inner,
+            bytes,
+            expected.as_ref(),
+            &ManifestPolicy::default(),
+        ) {
+            Ok(verified) => Box::into_raw(Box::new(DhowManifest {
+                manifest: verified.manifest().clone(),
+                bytes: bytes.to_vec(),
+            })),
+            Err(e) => {
+                crate::error::set_last_error(e.to_string());
+                std::ptr::null_mut()
+            }
+        }
+    })
+}
+
+/// Writes a manifest's wire bytes, following the two-call size convention.
+///
+/// # Safety
+///
+/// `manifest` must be a live handle; `buf` must be null or point to `len`
+/// writable bytes; `written` must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_manifest_bytes(
+    manifest: *const DhowManifest,
+    buf: *mut u8,
+    len: usize,
+    written: *mut usize,
+) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        if manifest.is_null() {
+            return fail(DhowStatus::NullArgument, "manifest handle was null");
+        }
+        // SAFETY: `manifest` is non-null and the caller guarantees it is live.
+        let manifest = unsafe { &*manifest };
+        // SAFETY: forwarded from this function's own contract.
+        unsafe { write_out(&manifest.bytes, buf, len, written) }
+    })
+}
+
+/// Writes a manifest's 16-byte session identifier.
+///
+/// # Safety
+///
+/// `manifest` must be a live handle and `out` must point to 16 writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_manifest_session_id(
+    manifest: *const DhowManifest,
+    out: *mut u8,
+) -> DhowStatus {
+    // SAFETY: forwarded from this function's own contract.
+    unsafe { manifest_field(manifest, out, |m| m.manifest.header().session_id().to_vec()) }
+}
+
+/// Writes a manifest's 32-byte HKDF salt.
+///
+/// # Safety
+///
+/// `manifest` must be a live handle and `out` must point to 32 writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_manifest_salt(
+    manifest: *const DhowManifest,
+    out: *mut u8,
+) -> DhowStatus {
+    // SAFETY: forwarded from this function's own contract.
+    unsafe { manifest_field(manifest, out, |m| m.manifest.header().salt().to_vec()) }
+}
+
+/// Writes a manifest's 24-byte AEAD nonce.
+///
+/// # Safety
+///
+/// `manifest` must be a live handle and `out` must point to 24 writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_manifest_nonce(
+    manifest: *const DhowManifest,
+    out: *mut u8,
+) -> DhowStatus {
+    // SAFETY: forwarded from this function's own contract.
+    unsafe { manifest_field(manifest, out, |m| m.manifest.header().nonce().to_vec()) }
+}
+
+/// Copies a fixed-size manifest field into a caller buffer.
+///
+/// # Safety
+///
+/// `manifest` must be a live handle and `out` must point to at least as many
+/// writable bytes as `extract` returns.
+unsafe fn manifest_field(
+    manifest: *const DhowManifest,
+    out: *mut u8,
+    extract: fn(&DhowManifest) -> Vec<u8>,
+) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        if manifest.is_null() {
+            return fail(DhowStatus::NullArgument, "manifest handle was null");
+        }
+        if out.is_null() {
+            return fail(DhowStatus::NullArgument, "output pointer was null");
+        }
+        // SAFETY: `manifest` is non-null and the caller guarantees it is live.
+        let manifest = unsafe { &*manifest };
+        let value = extract(manifest);
+        // SAFETY: the caller guarantees `value.len()` writable bytes at `out`,
+        // and the source is a local buffer that cannot overlap it.
+        unsafe { std::ptr::copy_nonoverlapping(value.as_ptr(), out, value.len()) };
+        DhowStatus::Ok
+    })
+}
+
+/// Writes a manifest's session parameters.
+///
+/// # Safety
+///
+/// `manifest` must be a live handle and `out` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_manifest_params(
+    manifest: *const DhowManifest,
+    out: *mut DhowSessionParams,
+) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        if manifest.is_null() {
+            return fail(DhowStatus::NullArgument, "manifest handle was null");
+        }
+        if out.is_null() {
+            return fail(DhowStatus::NullArgument, "output pointer was null");
+        }
+        // SAFETY: `manifest` is non-null and the caller guarantees it is live.
+        let manifest = unsafe { &*manifest };
+        let params = manifest.manifest.header().params();
+        // SAFETY: the caller guarantees `out` is writable and correctly aligned.
+        unsafe {
+            *out = DhowSessionParams {
+                payload_size: params.payload_size,
+                block_count: params.block_count,
+                symbol_size: params.symbol_size,
+                source_symbols_per_block: params.source_symbols_per_block,
+                total_symbols_per_block: params.total_symbols_per_block,
+                payload_digest: params.payload_digest,
+            }
+        };
+        DhowStatus::Ok
+    })
+}
+
+/// Returns the number of file entries, or a negative status on failure.
+///
+/// # Safety
+///
+/// `manifest` must be a live handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_manifest_file_count(manifest: *const DhowManifest) -> c_int {
+    let mut out: c_int = DhowStatus::NullArgument as c_int;
+    let status = guard(|| {
+        clear_last_error();
+        if manifest.is_null() {
+            return fail(DhowStatus::NullArgument, "manifest handle was null");
+        }
+        // SAFETY: `manifest` is non-null and the caller guarantees it is live.
+        let manifest = unsafe { &*manifest };
+        out = manifest.manifest.entries().len() as c_int;
+        DhowStatus::Ok
+    });
+    if status != DhowStatus::Ok {
+        return status as c_int;
+    }
+    out
+}
+
+/// Looks up one entry, or returns `None` with the error already recorded.
+///
+/// # Safety
+///
+/// `manifest` must be a live handle.
+unsafe fn entry_at<'a>(manifest: *const DhowManifest, index: usize) -> Option<&'a FileEntry> {
+    if manifest.is_null() {
+        fail(DhowStatus::NullArgument, "manifest handle was null");
+        return None;
+    }
+    // SAFETY: `manifest` is non-null and the caller guarantees it is live.
+    let manifest = unsafe { &*manifest };
+    match manifest.manifest.entries().get(index) {
+        Some(entry) => Some(entry),
+        None => {
+            fail(
+                DhowStatus::InvalidArgument,
+                format!(
+                    "file index {index} is out of range; the manifest has {} entries",
+                    manifest.manifest.entries().len()
+                ),
+            );
+            None
+        }
+    }
+}
+
+/// Writes one entry's name, without a NUL, following the two-call convention.
+///
+/// # Safety
+///
+/// `manifest` must be a live handle; `buf` must be null or point to `len`
+/// writable bytes; `written` must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_manifest_file_name(
+    manifest: *const DhowManifest,
+    index: usize,
+    buf: *mut u8,
+    len: usize,
+    written: *mut usize,
+) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        // SAFETY: forwarded from this function's own contract.
+        let Some(entry) = (unsafe { entry_at(manifest, index) }) else {
+            return DhowStatus::InvalidArgument;
+        };
+        // SAFETY: forwarded from this function's own contract.
+        unsafe { write_out(entry.name.as_bytes(), buf, len, written) }
+    })
+}
+
+/// Writes one entry's size in bytes.
+///
+/// # Safety
+///
+/// `manifest` must be a live handle and `out` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_manifest_file_size(
+    manifest: *const DhowManifest,
+    index: usize,
+    out: *mut u64,
+) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        if out.is_null() {
+            return fail(DhowStatus::NullArgument, "output pointer was null");
+        }
+        // SAFETY: forwarded from this function's own contract.
+        let Some(entry) = (unsafe { entry_at(manifest, index) }) else {
+            return DhowStatus::InvalidArgument;
+        };
+        // SAFETY: the caller guarantees `out` is writable and aligned.
+        unsafe { *out = entry.size };
+        DhowStatus::Ok
+    })
+}
+
+/// Writes one entry's 32-byte content digest.
+///
+/// # Safety
+///
+/// `manifest` must be a live handle and `out` must point to 32 writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_manifest_file_digest(
+    manifest: *const DhowManifest,
+    index: usize,
+    out: *mut u8,
+) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        if out.is_null() {
+            return fail(DhowStatus::NullArgument, "output pointer was null");
+        }
+        // SAFETY: forwarded from this function's own contract.
+        let Some(entry) = (unsafe { entry_at(manifest, index) }) else {
+            return DhowStatus::InvalidArgument;
+        };
+        // SAFETY: the caller guarantees 32 writable bytes at `out`, and the
+        // source is owned by this library and cannot overlap it.
+        unsafe { std::ptr::copy_nonoverlapping(entry.digest.as_ptr(), out, 32) };
+        DhowStatus::Ok
+    })
+}
+
+/// Returns 1 if an entry is executable, 0 if not, or a negative status.
+///
+/// # Safety
+///
+/// `manifest` must be a live handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_manifest_file_executable(
+    manifest: *const DhowManifest,
+    index: usize,
+) -> c_int {
+    let mut out: c_int = 0;
+    let status = guard(|| {
+        clear_last_error();
+        // SAFETY: forwarded from this function's own contract.
+        let Some(entry) = (unsafe { entry_at(manifest, index) }) else {
+            return DhowStatus::InvalidArgument;
+        };
+        out = c_int::from(entry.executable);
+        DhowStatus::Ok
+    });
+    if status != DhowStatus::Ok {
+        return status as c_int;
+    }
+    out
+}
+
+/// Releases a manifest handle. Passing null is a no-op.
+///
+/// # Safety
+///
+/// `manifest` must be null or a handle from this library that has not been
+/// freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_manifest_free(manifest: *mut DhowManifest) {
+    if manifest.is_null() {
+        return;
+    }
+    // SAFETY: the caller guarantees `manifest` came from `Box::into_raw` here
+    // and has not already been freed.
+    drop(unsafe { Box::from_raw(manifest) });
 }

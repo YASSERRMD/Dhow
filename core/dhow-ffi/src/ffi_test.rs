@@ -914,3 +914,612 @@ fn test_blake3_rejects_null_arguments() {
         DhowStatus::Ok
     );
 }
+
+// --- Identities ---
+
+/// Builds a `DhowFileEntry` array plus the CStrings backing its names.
+///
+/// The CStrings are returned alongside the entries because the entries only
+/// borrow their names; dropping them first would leave dangling pointers, which
+/// is exactly the mistake a foreign caller can make and the reason the lifetime
+/// is spelled out in the header.
+fn entry_array(files: &[(&str, u64, u8, bool)]) -> (Vec<CString>, Vec<DhowFileEntry>) {
+    let names: Vec<CString> = files.iter().map(|f| CString::new(f.0).unwrap()).collect();
+    let entries = files
+        .iter()
+        .zip(&names)
+        .map(|((_, size, digest_byte, executable), name)| DhowFileEntry {
+            name: name.as_ptr(),
+            size: *size,
+            digest: [*digest_byte; 32],
+            executable: u8::from(*executable),
+            reserved: [0; 7],
+        })
+        .collect();
+    (names, entries)
+}
+
+fn sample_files() -> Vec<(&'static str, u64, u8, bool)> {
+    vec![
+        ("docs/readme.md", 100, 0x01, false),
+        ("run.sh", 12, 0x02, true),
+        ("nested/deep/blob.bin", 65536, 0x03, false),
+    ]
+}
+
+#[test]
+fn identity_generates_saves_and_loads() {
+    let dir = std::env::temp_dir().join(format!("dhow-ffi-identity-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = CString::new(dir.join("sender.key").to_str().unwrap()).unwrap();
+
+    let identity = dhow_identity_generate();
+    assert!(!identity.is_null());
+    assert_eq!(
+        unsafe { dhow_identity_save(identity, path.as_ptr()) },
+        DhowStatus::Ok
+    );
+
+    let loaded = unsafe { dhow_identity_load(path.as_ptr()) };
+    assert!(!loaded.is_null(), "saved identity did not load back");
+
+    // The same identity must produce the same public key, or a receiver
+    // holding the public half would stop being able to verify after a reload.
+    let mut a = [0u8; 32];
+    let mut b = [0u8; 32];
+    let pa = unsafe { dhow_identity_public(identity) };
+    let pb = unsafe { dhow_identity_public(loaded) };
+    assert_eq!(
+        unsafe { dhow_public_bytes(pa, a.as_mut_ptr()) },
+        DhowStatus::Ok
+    );
+    assert_eq!(
+        unsafe { dhow_public_bytes(pb, b.as_mut_ptr()) },
+        DhowStatus::Ok
+    );
+    assert_eq!(a, b);
+
+    unsafe {
+        dhow_public_free(pa);
+        dhow_public_free(pb);
+        dhow_identity_free(loaded);
+        dhow_identity_free(identity);
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn an_operator_key_does_not_load_as_an_identity() {
+    // The two key kinds are distinguished inside the key file, and confusing
+    // them would mean signing with a key both operators hold.
+    let dir = std::env::temp_dir().join(format!("dhow-ffi-kind-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = CString::new(dir.join("operator.key").to_str().unwrap()).unwrap();
+
+    let key = dhow_key_generate();
+    assert_eq!(unsafe { dhow_key_save(key, path.as_ptr()) }, DhowStatus::Ok);
+    assert!(
+        unsafe { dhow_identity_load(path.as_ptr()) }.is_null(),
+        "an operator key loaded as an identity"
+    );
+    unsafe { dhow_key_free(key) };
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn public_identity_round_trips_through_a_file() {
+    let dir = std::env::temp_dir().join(format!("dhow-ffi-public-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = CString::new(dir.join("sender.pub").to_str().unwrap()).unwrap();
+
+    let identity = dhow_identity_generate();
+    let public = unsafe { dhow_identity_public(identity) };
+    assert_eq!(
+        unsafe { dhow_public_save(public, path.as_ptr()) },
+        DhowStatus::Ok
+    );
+
+    let loaded = unsafe { dhow_public_load(path.as_ptr()) };
+    assert!(!loaded.is_null());
+
+    let mut a = [0u8; 32];
+    let mut b = [0u8; 32];
+    unsafe { dhow_public_bytes(public, a.as_mut_ptr()) };
+    unsafe { dhow_public_bytes(loaded, b.as_mut_ptr()) };
+    assert_eq!(a, b);
+
+    unsafe {
+        dhow_public_free(loaded);
+        dhow_public_free(public);
+        dhow_identity_free(identity);
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn fingerprint_follows_the_two_call_convention() {
+    let identity = dhow_identity_generate();
+    let public = unsafe { dhow_identity_public(identity) };
+
+    let mut needed = 0usize;
+    assert_eq!(
+        unsafe { dhow_public_fingerprint(public, ptr::null_mut(), 0, &mut needed) },
+        DhowStatus::Ok
+    );
+    assert_eq!(needed, 23, "8 hex bytes joined by colons");
+
+    let mut buf = vec![0u8; needed];
+    assert_eq!(
+        unsafe { dhow_public_fingerprint(public, buf.as_mut_ptr(), buf.len(), ptr::null_mut()) },
+        DhowStatus::Ok
+    );
+    let text = String::from_utf8(buf).unwrap();
+    assert_eq!(text.split(':').count(), 8, "fingerprint was {text}");
+
+    // One byte short must be refused rather than truncated.
+    let mut small = vec![0u8; needed - 1];
+    assert_eq!(
+        unsafe {
+            dhow_public_fingerprint(public, small.as_mut_ptr(), small.len(), ptr::null_mut())
+        },
+        DhowStatus::BufferTooSmall
+    );
+
+    unsafe {
+        dhow_public_free(public);
+        dhow_identity_free(identity);
+    }
+}
+
+#[test]
+fn identity_calls_reject_null_handles() {
+    assert!(unsafe { dhow_identity_public(ptr::null()) }.is_null());
+    assert_eq!(
+        unsafe { dhow_identity_save(ptr::null(), ptr::null()) },
+        DhowStatus::NullArgument
+    );
+    assert_eq!(
+        unsafe { dhow_public_bytes(ptr::null(), ptr::null_mut()) },
+        DhowStatus::NullArgument
+    );
+    // Freeing null is a no-op on every handle type here.
+    unsafe {
+        dhow_identity_free(ptr::null_mut());
+        dhow_public_free(ptr::null_mut());
+        dhow_manifest_free(ptr::null_mut());
+    }
+}
+
+// --- Manifests ---
+
+#[test]
+fn a_manifest_round_trips_its_whole_inventory() {
+    let identity = dhow_identity_generate();
+    let public = unsafe { dhow_identity_public(identity) };
+    let files = sample_files();
+    let (_names, entries) = entry_array(&files);
+    let params = params_for(4096);
+
+    let built = unsafe {
+        dhow_manifest_build(
+            identity,
+            SESSION.as_ptr(),
+            SALT.as_ptr(),
+            NONCE.as_ptr(),
+            params,
+            entries.as_ptr(),
+            entries.len(),
+        )
+    };
+    assert!(!built.is_null(), "manifest build failed");
+
+    let mut needed = 0usize;
+    assert_eq!(
+        unsafe { dhow_manifest_bytes(built, ptr::null_mut(), 0, &mut needed) },
+        DhowStatus::Ok
+    );
+    let mut wire = vec![0u8; needed];
+    assert_eq!(
+        unsafe { dhow_manifest_bytes(built, wire.as_mut_ptr(), wire.len(), ptr::null_mut()) },
+        DhowStatus::Ok
+    );
+
+    let verified = unsafe { dhow_manifest_verify(public, wire.as_ptr(), wire.len(), ptr::null()) };
+    assert!(
+        !verified.is_null(),
+        "a manifest we just signed did not verify"
+    );
+
+    // Session material.
+    let mut session = [0u8; 16];
+    let mut salt = [0u8; 32];
+    let mut nonce = [0u8; 24];
+    unsafe {
+        dhow_manifest_session_id(verified, session.as_mut_ptr());
+        dhow_manifest_salt(verified, salt.as_mut_ptr());
+        dhow_manifest_nonce(verified, nonce.as_mut_ptr());
+    }
+    assert_eq!(session, SESSION);
+    assert_eq!(salt, SALT);
+    assert_eq!(nonce, NONCE);
+
+    let mut out_params = params_for(0);
+    assert_eq!(
+        unsafe { dhow_manifest_params(verified, &mut out_params) },
+        DhowStatus::Ok
+    );
+    assert_eq!(out_params.payload_size, params.payload_size);
+    assert_eq!(out_params.block_count, params.block_count);
+    assert_eq!(out_params.symbol_size, params.symbol_size);
+    assert_eq!(
+        out_params.source_symbols_per_block,
+        params.source_symbols_per_block
+    );
+    assert_eq!(
+        out_params.total_symbols_per_block,
+        params.total_symbols_per_block
+    );
+    assert_eq!(out_params.payload_digest, params.payload_digest);
+
+    // Inventory, through the indexed accessors.
+    assert_eq!(
+        unsafe { dhow_manifest_file_count(verified) },
+        files.len() as i32
+    );
+    for (i, (name, size, digest_byte, executable)) in files.iter().enumerate() {
+        let mut needed = 0usize;
+        assert_eq!(
+            unsafe { dhow_manifest_file_name(verified, i, ptr::null_mut(), 0, &mut needed) },
+            DhowStatus::Ok
+        );
+        let mut buf = vec![0u8; needed];
+        assert_eq!(
+            unsafe {
+                dhow_manifest_file_name(verified, i, buf.as_mut_ptr(), buf.len(), ptr::null_mut())
+            },
+            DhowStatus::Ok
+        );
+        assert_eq!(String::from_utf8(buf).unwrap(), *name);
+
+        let mut got_size = 0u64;
+        assert_eq!(
+            unsafe { dhow_manifest_file_size(verified, i, &mut got_size) },
+            DhowStatus::Ok
+        );
+        assert_eq!(got_size, *size);
+
+        let mut digest = [0u8; 32];
+        assert_eq!(
+            unsafe { dhow_manifest_file_digest(verified, i, digest.as_mut_ptr()) },
+            DhowStatus::Ok
+        );
+        assert_eq!(digest, [*digest_byte; 32]);
+
+        assert_eq!(
+            unsafe { dhow_manifest_file_executable(verified, i) },
+            i32::from(*executable),
+            "executable bit wrong for {name}"
+        );
+    }
+
+    unsafe {
+        dhow_manifest_free(verified);
+        dhow_manifest_free(built);
+        dhow_public_free(public);
+        dhow_identity_free(identity);
+    }
+}
+
+#[test]
+fn an_empty_inventory_round_trips() {
+    // A dataset of no files is a strange thing to send and not a malformed one.
+    let identity = dhow_identity_generate();
+    let public = unsafe { dhow_identity_public(identity) };
+
+    let built = unsafe {
+        dhow_manifest_build(
+            identity,
+            SESSION.as_ptr(),
+            SALT.as_ptr(),
+            NONCE.as_ptr(),
+            params_for(0),
+            ptr::null(),
+            0,
+        )
+    };
+    assert!(!built.is_null());
+
+    let mut needed = 0usize;
+    unsafe { dhow_manifest_bytes(built, ptr::null_mut(), 0, &mut needed) };
+    let mut wire = vec![0u8; needed];
+    unsafe { dhow_manifest_bytes(built, wire.as_mut_ptr(), wire.len(), ptr::null_mut()) };
+
+    let verified = unsafe { dhow_manifest_verify(public, wire.as_ptr(), wire.len(), ptr::null()) };
+    assert!(!verified.is_null());
+    assert_eq!(unsafe { dhow_manifest_file_count(verified) }, 0);
+
+    unsafe {
+        dhow_manifest_free(verified);
+        dhow_manifest_free(built);
+        dhow_public_free(public);
+        dhow_identity_free(identity);
+    }
+}
+
+#[test]
+fn a_manifest_signed_by_another_identity_is_rejected() {
+    let sender = dhow_identity_generate();
+    let stranger = dhow_identity_generate();
+    let stranger_public = unsafe { dhow_identity_public(stranger) };
+    let (_names, entries) = entry_array(&sample_files());
+
+    let built = unsafe {
+        dhow_manifest_build(
+            sender,
+            SESSION.as_ptr(),
+            SALT.as_ptr(),
+            NONCE.as_ptr(),
+            params_for(4096),
+            entries.as_ptr(),
+            entries.len(),
+        )
+    };
+    let mut needed = 0usize;
+    unsafe { dhow_manifest_bytes(built, ptr::null_mut(), 0, &mut needed) };
+    let mut wire = vec![0u8; needed];
+    unsafe { dhow_manifest_bytes(built, wire.as_mut_ptr(), wire.len(), ptr::null_mut()) };
+
+    assert!(
+        unsafe { dhow_manifest_verify(stranger_public, wire.as_ptr(), wire.len(), ptr::null()) }
+            .is_null(),
+        "a manifest verified against the wrong identity"
+    );
+
+    unsafe {
+        dhow_manifest_free(built);
+        dhow_public_free(stranger_public);
+        dhow_identity_free(stranger);
+        dhow_identity_free(sender);
+    }
+}
+
+#[test]
+fn any_altered_byte_fails_verification() {
+    let identity = dhow_identity_generate();
+    let public = unsafe { dhow_identity_public(identity) };
+    let (_names, entries) = entry_array(&sample_files());
+
+    let built = unsafe {
+        dhow_manifest_build(
+            identity,
+            SESSION.as_ptr(),
+            SALT.as_ptr(),
+            NONCE.as_ptr(),
+            params_for(4096),
+            entries.as_ptr(),
+            entries.len(),
+        )
+    };
+    let mut needed = 0usize;
+    unsafe { dhow_manifest_bytes(built, ptr::null_mut(), 0, &mut needed) };
+    let mut good = vec![0u8; needed];
+    unsafe { dhow_manifest_bytes(built, good.as_mut_ptr(), good.len(), ptr::null_mut()) };
+
+    for offset in 0..good.len() {
+        let mut wire = good.clone();
+        wire[offset] = wire[offset].wrapping_add(1);
+        assert!(
+            unsafe { dhow_manifest_verify(public, wire.as_ptr(), wire.len(), ptr::null()) }
+                .is_null(),
+            "a manifest with byte {offset} altered still verified"
+        );
+    }
+
+    unsafe {
+        dhow_manifest_free(built);
+        dhow_public_free(public);
+        dhow_identity_free(identity);
+    }
+}
+
+#[test]
+fn session_binding_is_applied_when_asked_for() {
+    let identity = dhow_identity_generate();
+    let public = unsafe { dhow_identity_public(identity) };
+    let (_names, entries) = entry_array(&sample_files());
+
+    let built = unsafe {
+        dhow_manifest_build(
+            identity,
+            SESSION.as_ptr(),
+            SALT.as_ptr(),
+            NONCE.as_ptr(),
+            params_for(4096),
+            entries.as_ptr(),
+            entries.len(),
+        )
+    };
+    let mut needed = 0usize;
+    unsafe { dhow_manifest_bytes(built, ptr::null_mut(), 0, &mut needed) };
+    let mut wire = vec![0u8; needed];
+    unsafe { dhow_manifest_bytes(built, wire.as_mut_ptr(), wire.len(), ptr::null_mut()) };
+
+    let matching =
+        unsafe { dhow_manifest_verify(public, wire.as_ptr(), wire.len(), SESSION.as_ptr()) };
+    assert!(!matching.is_null(), "the right session was rejected");
+
+    let other = [0x99u8; 16];
+    assert!(
+        unsafe { dhow_manifest_verify(public, wire.as_ptr(), wire.len(), other.as_ptr()) }
+            .is_null(),
+        "a manifest from another session was accepted"
+    );
+
+    unsafe {
+        dhow_manifest_free(matching);
+        dhow_manifest_free(built);
+        dhow_public_free(public);
+        dhow_identity_free(identity);
+    }
+}
+
+#[test]
+fn indexed_accessors_reject_an_out_of_range_index() {
+    let identity = dhow_identity_generate();
+    let (_names, entries) = entry_array(&sample_files());
+    let built = unsafe {
+        dhow_manifest_build(
+            identity,
+            SESSION.as_ptr(),
+            SALT.as_ptr(),
+            NONCE.as_ptr(),
+            params_for(4096),
+            entries.as_ptr(),
+            entries.len(),
+        )
+    };
+
+    let past_the_end = entries.len();
+    let mut size = 0u64;
+    assert_eq!(
+        unsafe { dhow_manifest_file_size(built, past_the_end, &mut size) },
+        DhowStatus::InvalidArgument
+    );
+    let mut digest = [0u8; 32];
+    assert_eq!(
+        unsafe { dhow_manifest_file_digest(built, past_the_end, digest.as_mut_ptr()) },
+        DhowStatus::InvalidArgument
+    );
+    assert_eq!(
+        unsafe {
+            dhow_manifest_file_name(built, past_the_end, ptr::null_mut(), 0, ptr::null_mut())
+        },
+        DhowStatus::InvalidArgument
+    );
+    assert!(unsafe { dhow_manifest_file_executable(built, past_the_end) } < 0);
+    // usize::MAX is the index a caller reaches by passing -1 from C.
+    assert!(unsafe { dhow_manifest_file_executable(built, usize::MAX) } < 0);
+
+    unsafe {
+        dhow_manifest_free(built);
+        dhow_identity_free(identity);
+    }
+}
+
+#[test]
+fn a_reserved_byte_in_a_file_entry_is_rejected() {
+    // The reserved bytes exist so the struct's layout survives a future flag.
+    // A caller that sets one is either using a newer header than this library
+    // or has left the struct uninitialised, and both are worth refusing.
+    let identity = dhow_identity_generate();
+    let name = CString::new("a.txt").unwrap();
+    let entry = DhowFileEntry {
+        name: name.as_ptr(),
+        size: 1,
+        digest: [0; 32],
+        executable: 0,
+        reserved: [0, 0, 0, 1, 0, 0, 0],
+    };
+    assert!(
+        unsafe {
+            dhow_manifest_build(
+                identity,
+                SESSION.as_ptr(),
+                SALT.as_ptr(),
+                NONCE.as_ptr(),
+                params_for(16),
+                &entry,
+                1,
+            )
+        }
+        .is_null()
+    );
+    unsafe { dhow_identity_free(identity) };
+}
+
+#[test]
+fn manifest_build_rejects_null_arguments() {
+    let identity = dhow_identity_generate();
+    let (_names, entries) = entry_array(&sample_files());
+
+    // A null identity.
+    assert!(
+        unsafe {
+            dhow_manifest_build(
+                ptr::null(),
+                SESSION.as_ptr(),
+                SALT.as_ptr(),
+                NONCE.as_ptr(),
+                params_for(16),
+                entries.as_ptr(),
+                entries.len(),
+            )
+        }
+        .is_null()
+    );
+
+    // A null salt.
+    assert!(
+        unsafe {
+            dhow_manifest_build(
+                identity,
+                SESSION.as_ptr(),
+                ptr::null(),
+                NONCE.as_ptr(),
+                params_for(16),
+                entries.as_ptr(),
+                entries.len(),
+            )
+        }
+        .is_null()
+    );
+
+    // A non-zero count with a null array.
+    assert!(
+        unsafe {
+            dhow_manifest_build(
+                identity,
+                SESSION.as_ptr(),
+                SALT.as_ptr(),
+                NONCE.as_ptr(),
+                params_for(16),
+                ptr::null(),
+                3,
+            )
+        }
+        .is_null()
+    );
+
+    unsafe { dhow_identity_free(identity) };
+}
+
+#[test]
+fn a_traversal_name_never_reaches_a_verified_manifest() {
+    // Signing something is not the same as it being safe to extract. The name
+    // policy applies on the way in as well as on the way out.
+    let identity = dhow_identity_generate();
+    let name = CString::new("../../etc/passwd").unwrap();
+    let entry = DhowFileEntry {
+        name: name.as_ptr(),
+        size: 1,
+        digest: [0; 32],
+        executable: 0,
+        reserved: [0; 7],
+    };
+    assert!(
+        unsafe {
+            dhow_manifest_build(
+                identity,
+                SESSION.as_ptr(),
+                SALT.as_ptr(),
+                NONCE.as_ptr(),
+                params_for(16),
+                &entry,
+                1,
+            )
+        }
+        .is_null(),
+        "a traversal name was signed"
+    );
+    unsafe { dhow_identity_free(identity) };
+}
