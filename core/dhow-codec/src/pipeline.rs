@@ -79,6 +79,31 @@ pub struct PreparedFrame {
     pub frame: Frame,
 }
 
+/// Interleaves per-block frame lists round-robin into one stream.
+///
+/// Blocks differ in length when the payload does not divide evenly, so the
+/// walk continues until every list is exhausted rather than stopping at the
+/// shortest. Ordering is fully determined by the input, so the result stays
+/// deterministic.
+fn interleave(per_block: Vec<Vec<PreparedFrame>>) -> Vec<PreparedFrame> {
+    let longest = per_block.iter().map(Vec::len).max().unwrap_or(0);
+    let total: usize = per_block.iter().map(Vec::len).sum();
+
+    let mut out = Vec::with_capacity(total);
+    let mut cursors: Vec<std::vec::IntoIter<PreparedFrame>> =
+        per_block.into_iter().map(Vec::into_iter).collect();
+
+    for _ in 0..longest {
+        for cursor in &mut cursors {
+            if let Some(frame) = cursor.next() {
+                out.push(frame);
+            }
+        }
+    }
+
+    out
+}
+
 /// Validates the session parameters this pipeline depends on.
 ///
 /// Both the encoder and the decoder must agree on these bounds, so the check
@@ -164,13 +189,23 @@ impl Pipeline {
             .total_symbols_per_block
             .saturating_sub(self.params.source_symbols_per_block);
 
-        let mut frames = Vec::new();
+        // Frames are collected per block and interleaved afterwards. Emitting
+        // block by block would make a contiguous outage - an operator stepping
+        // in front of the screen, a camera refocusing - fall entirely within
+        // one block, and RaptorQ repairs within a block, never across them, so
+        // no amount of repair overhead recovers that. Interleaving spreads any
+        // contiguous run of loss evenly over every block, where the repair
+        // symbols can absorb it.
+        let mut per_block: Vec<Vec<PreparedFrame>> = Vec::new();
 
         for block in &self.chunk_map.blocks {
             // A zero-length block carries nothing; RaptorQ cannot encode it.
             if block.size == 0 {
+                per_block.push(Vec::new());
                 continue;
             }
+
+            let mut frames = Vec::new();
 
             let block_bytes = self.chunk_map.extract_block(payload, block.index)?;
             let encoder = Encoder::new(
@@ -202,9 +237,11 @@ impl Pipeline {
                     frame: Frame::build(&header, &serialized, &self.session_key),
                 });
             }
+
+            per_block.push(frames);
         }
 
-        Ok(frames)
+        Ok(interleave(per_block))
     }
 
     /// Encodes a payload and serializes each frame to bytes.

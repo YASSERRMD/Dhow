@@ -1,5 +1,68 @@
 # Phase Log
 
+## Phase 23 - Loopback integration
+
+**Objective:** An unattended end-to-end harness that runs a real transfer
+through the shipped binary with faults injected, wired into the gate.
+
+**Gates:** loopback transfer completes unattended; scattered loss, contiguous
+outage, corruption, wrong key, and a damaged dataset all handled as intended.
+
+### Defect found: contiguous loss was unrecoverable
+
+The harness earned its place immediately. Its first version dropped a
+contiguous run of frames and the transfer failed. That looked like a harness
+bug and was really the codec reporting a genuine weakness.
+
+Frames were emitted block by block, so every frame of block 0 came first. A
+contiguous outage - an operator stepping in front of the screen, a camera
+refocusing, a light flickering - falls entirely inside one block. RaptorQ
+repairs *within* a block and never across blocks, so a block whose whole run
+was missed is unrecoverable at any repair overhead.
+
+Fixed by interleaving frames round-robin across blocks, which spreads any
+contiguous run of loss evenly over every block. A test drops a fifth of the
+stream as one unbroken run and still completes; the harness drops a sixth.
+
+### Consequence worth knowing
+
+Interleaving moves the pathological case rather than removing it. Loss on a
+period *equal to the block count* now lands on the same block every time and
+concentrates there, which is the one pattern interleaving cannot help. A real
+camera does not drop on such a period, but a test can, and one in the
+end-to-end suite did: it dropped every fourth frame against four blocks and
+began failing the moment interleaving landed. Its stride is now coprime with
+the block count, with the reason recorded at the call site.
+
+This belongs in the operations guide when Phase 32 writes it: block count
+interacts with the loss pattern the physical setup produces.
+
+### Harness output
+
+```
+$ scripts/loopback.sh 4 20
+  PASS  sent 6592 frames in 0s
+  PASS  clean transfer round trips byte for byte
+  PASS  executable bit survived
+  PASS  recovered from 1319 dropped frames
+  PASS  recovered from a contiguous outage of 1098 frames
+  PASS  corrupted frames were rejected without poisoning the decode
+  PASS  wrong key fails closed and writes nothing
+  PASS  verify accepts a good dataset
+  PASS  verify rejects a damaged dataset
+=== LOOPBACK PASSED in 11s ===
+```
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+  Passed: 13
+  Failed: 0
+ALL GATES PASSED
+```
+
+
 ## Phase 22 - Screen renderer
 
 **Objective:** A display loop that shows a frame stream at a configurable
