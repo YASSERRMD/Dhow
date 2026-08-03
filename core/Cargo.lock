@@ -238,6 +238,7 @@ dependencies = [
  "dhow-codec",
  "ed25519-dalek",
  "getrandom 0.3.4",
+ "proptest",
  "subtle",
  "thiserror",
  "zeroize",
