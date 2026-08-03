@@ -89,8 +89,8 @@ func transfer(t *testing.T, plaintext []byte, keep func(i int) bool) ([]byte, er
 func TestABIVersionMatches(t *testing.T) {
 	// A mismatch means Go and Rust disagree about handle layout, which must be
 	// caught at startup rather than surfacing as memory corruption.
-	if got := ABIVersion(); got != 3 {
-		t.Errorf("ABIVersion() = %d, want 3", got)
+	if got := ABIVersion(); got != 4 {
+		t.Errorf("ABIVersion() = %d, want 4", got)
 	}
 }
 
