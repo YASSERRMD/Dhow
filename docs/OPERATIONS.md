@@ -228,7 +228,7 @@ Always run `verify` afterwards, and again later if the dataset matters. See
 
 | Symptom | Likely cause | What to do |
 |---------|--------------|------------|
-| `recv` exits 4, zero blocks complete, high rejection count | Frames are being read but not authenticated — wrong key. | Confirm both sides used the same `operator.key`. The rejection count climbing while blocks stay at zero is the signature. |
+| `recv` exits 4, zero blocks complete, high rejection count | Frames are being read but not authenticated — wrong key. | Confirm both sides used the same `operator.key`. Under `-verbose` the receiver says this outright once fifty frames have been rejected with none accepted. |
 | `recv` exits 4, zero frames accepted at all | Nothing is being captured. | Check framing and focus. Scan the calibration pattern with a phone. |
 | `recv` exits 4, most blocks complete, one stuck | Periodic loss landing on the block period. | Change `-blocks` to a nearby prime and re-send. Raising `-overhead` will not help. |
 | `recv` exits 4, all blocks climbing slowly | Ordinary loss; the transfer is just slow. | Let it run. The stream loops. Consider a lower QR version or better lighting. |
