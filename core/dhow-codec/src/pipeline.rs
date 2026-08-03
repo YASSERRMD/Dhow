@@ -56,8 +56,9 @@
 use crate::blake3::{Blake3Hasher, DIGEST_LEN, blake3_digest};
 use crate::chunker::{ChunkMap, ChunkParams};
 use crate::frame::{FRAME_HEADER_SIZE, Frame, FrameHeader, FrameType, MAX_PAYLOAD_LEN};
+use crate::resume::{BlockEntry, ResumeFile};
 use crate::session::SessionParams;
-use crate::{CodecError, FecError, FrameError, SessionError};
+use crate::{CodecError, FecError, FrameError, ResumeError, SessionError};
 use raptorq::{Decoder, Encoder, EncodingPacket, ObjectTransmissionInformation};
 
 /// The session key used for frame MAC computation.
@@ -523,6 +524,86 @@ impl PipelineDecoder {
         }
 
         Ok(payload)
+    }
+
+    /// Builds a resume file describing this decoder's progress.
+    ///
+    /// `journal_bytes` is the length of the caller's journal at this moment.
+    /// The caller owns the journal, so only it knows how long the file is; the
+    /// decoder knows only what the frames in it were.
+    pub fn resume_state(&self, journal_bytes: u64) -> ResumeFile {
+        let entries: Vec<BlockEntry> = (0..self.blocks.len())
+            .map(|index| {
+                BlockEntry::new(
+                    index as u32,
+                    self.params.total_symbols_per_block,
+                    self.held_counts[index],
+                    &self.held[index],
+                )
+            })
+            .collect();
+
+        ResumeFile::new(
+            self.session_id,
+            journal_bytes,
+            self.journal_digest(),
+            &entries,
+        )
+    }
+
+    /// Checks a resume file against what this decoder actually holds.
+    ///
+    /// Called after replaying a journal: the file says what the replay should
+    /// have produced, and this reports whether it did. A mismatch means the
+    /// journal and its index describe different things, which is a reason to
+    /// stop rather than to guess which one is right.
+    ///
+    /// The frames were each authenticated on the way in, so this is not what
+    /// keeps forged symbols out. It is what keeps a *stale* or *swapped* pair
+    /// of files from being mistaken for progress that was really made.
+    pub fn verify_resume(&self, state: &ResumeFile) -> Result<(), CodecError> {
+        if state.session_id() != self.session_id {
+            return Err(ResumeError::SessionMismatch.into());
+        }
+
+        if state.block_count() != self.block_count() {
+            return Err(ResumeError::JournalMismatch {
+                details: format!(
+                    "resume state covers {} blocks, session has {}",
+                    state.block_count(),
+                    self.block_count()
+                ),
+            }
+            .into());
+        }
+
+        if state.journal_digest() != self.journal_digest() {
+            return Err(ResumeError::JournalMismatch {
+                details: "replayed frames do not reproduce the recorded digest".to_string(),
+            }
+            .into());
+        }
+
+        for entry in state.entries() {
+            let index = entry.block_index as usize;
+            if entry.symbol_count != self.params.total_symbols_per_block {
+                return Err(ResumeError::JournalMismatch {
+                    details: format!(
+                        "block {index} declares {} symbols, session has {}",
+                        entry.symbol_count, self.params.total_symbols_per_block
+                    ),
+                }
+                .into());
+            }
+            if entry.symbol_bitmap != self.held[index] {
+                return Err(ResumeError::JournalMismatch {
+                    details: format!("block {index} holds different symbols than recorded"),
+                }
+                .into());
+            }
+        }
+
+        Ok(())
     }
 
     /// Returns the session ID this decoder accepts frames for.
