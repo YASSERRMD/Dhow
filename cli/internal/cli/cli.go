@@ -838,7 +838,12 @@ func runVerify(env Env, args []string) error {
 	in := fs.String("in", "frames", "directory holding the transfer record")
 	dir := fs.String("dir", "received", "extracted dataset to check")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	resolve := verbosityFlags(fs)
 	if err := fs.Parse(args); err != nil {
+		return &exitError{code: ExitUsage, err: err}
+	}
+	level, err := resolve()
+	if err != nil {
 		return &exitError{code: ExitUsage, err: err}
 	}
 
@@ -846,6 +851,9 @@ func runVerify(env Env, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	level.say(env.Stderr, loud, "checking %d files in %s against the transfer record\n",
+		len(record.Files), *dir)
 
 	problems, checked, bytes := inspectDataset(*dir, record.Files)
 	ok := len(problems) == 0
@@ -866,6 +874,11 @@ func runVerify(env Env, args []string) error {
 		}
 	}
 
+	// A failure is always reported, at every level. -quiet suppresses the
+	// summary a person reads, never the fact that verification failed.
+	if level == quiet && !*asJSON && ok {
+		return nil
+	}
 	if err := emit(env.Stdout, *asJSON,
 		verifyResult{
 			OK:        ok,
