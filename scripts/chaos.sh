@@ -66,6 +66,27 @@ pick() {
     eval "PICK_VALUE=\${$((RAND_VALUE + 1))}"
 }
 
+# --- Self-check: the seed must reproduce ---
+#
+# The harness's central promise is that a failing round can be replayed from
+# the printed seed. If the generator drifts, the seed is decoration and every
+# failure it ever reports is unreproducible. Two short sequences from the same
+# seed are compared before any transfer runs.
+selftest() {
+    local saved=$RAND_STATE
+    local a="" b="" i
+    RAND_STATE="$SEED"
+    for i in $(seq 1 20); do rand 1000; a="$a $RAND_VALUE"; done
+    RAND_STATE="$SEED"
+    for i in $(seq 1 20); do rand 1000; b="$b $RAND_VALUE"; done
+    RAND_STATE=$saved
+    [ "$a" = "$b" ] || fail "the generator is not reproducible from its seed"
+    # A stuck generator would also compare equal to itself, so check it moves.
+    [ "$(echo "$a" | tr ' ' '\n' | sort -u | wc -l)" -gt 5 ] \
+        || fail "the generator produced almost the same value 20 times"
+}
+selftest
+
 echo "=== dhow chaos soak ==="
 echo "rounds ${ROUNDS}, seed ${SEED}"
 echo
