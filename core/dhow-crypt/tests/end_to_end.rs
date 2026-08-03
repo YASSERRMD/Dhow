@@ -134,12 +134,18 @@ fn transfer_survives_dropped_frames() {
     let plaintext = payload_of(32 * 1024);
     let tx = send(&operator, &plaintext, 2);
 
-    // Drop every fourth frame, as a camera missing captures would.
+    // Drop every third frame. The stride is deliberately coprime with the
+    // block count: frames are interleaved round-robin across blocks, so a
+    // stride equal to the block count would land on the same block every time
+    // and concentrate all the loss there. RaptorQ repairs within a block, so
+    // concentrated loss is far harder to absorb than the same volume spread
+    // evenly. A real camera does not drop on a period aligned to the block
+    // count, but a test easily can.
     let received: Vec<Vec<u8>> = tx
         .frames
         .iter()
         .enumerate()
-        .filter(|(i, _)| i % 4 != 0)
+        .filter(|(i, _)| i % 3 != 0)
         .map(|(_, f)| f.clone())
         .collect();
 
