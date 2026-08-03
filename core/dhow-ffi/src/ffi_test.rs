@@ -830,3 +830,82 @@ fn test_resume_state_read_rejects_a_truncated_file() {
 fn test_abi_version_is_two() {
     assert_eq!(dhow_abi_version(), 2);
 }
+
+// --- Digests ---
+
+/// Formats a digest as lower-case hex.
+///
+/// Written out rather than pulled from a crate: this is the only place in this
+/// package that needs it, and a test dependency is still a dependency.
+fn hex_of(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[test]
+fn test_blake3_matches_the_published_vectors() {
+    // The empty digest and the one-byte digest are the two values every BLAKE3
+    // implementation is checked against first.
+    let cases: [(&[u8], &str); 2] = [
+        (
+            b"",
+            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+        ),
+        (
+            b"\x00",
+            "2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213",
+        ),
+    ];
+
+    for (input, expected) in cases {
+        let mut out = [0u8; 32];
+        let status = unsafe { dhow_blake3(input.as_ptr(), input.len(), out.as_mut_ptr()) };
+        assert_eq!(status, DhowStatus::Ok);
+        assert_eq!(hex_of(&out), expected, "input {input:?}");
+    }
+}
+
+#[test]
+fn test_blake3_distinguishes_inputs_that_differ_by_one_bit() {
+    let a = [0x00u8; 64];
+    let mut b = a;
+    b[63] = 0x01;
+
+    let mut da = [0u8; 32];
+    let mut db = [0u8; 32];
+    assert_eq!(
+        unsafe { dhow_blake3(a.as_ptr(), a.len(), da.as_mut_ptr()) },
+        DhowStatus::Ok
+    );
+    assert_eq!(
+        unsafe { dhow_blake3(b.as_ptr(), b.len(), db.as_mut_ptr()) },
+        DhowStatus::Ok
+    );
+    assert_ne!(da, db);
+}
+
+#[test]
+fn test_blake3_rejects_null_arguments() {
+    let data = [1u8, 2, 3];
+    let mut out = [0u8; 32];
+
+    assert_eq!(
+        unsafe { dhow_blake3(data.as_ptr(), data.len(), ptr::null_mut()) },
+        DhowStatus::NullArgument
+    );
+    assert_eq!(
+        unsafe { dhow_blake3(ptr::null(), 8, out.as_mut_ptr()) },
+        DhowStatus::NullArgument
+    );
+
+    // Null is null whatever the length says, matching every other buffer
+    // argument here. A caller hashing an empty file passes a valid pointer.
+    assert_eq!(
+        unsafe { dhow_blake3(ptr::null(), 0, out.as_mut_ptr()) },
+        DhowStatus::NullArgument
+    );
+    let empty = [0u8; 1];
+    assert_eq!(
+        unsafe { dhow_blake3(empty.as_ptr(), 0, out.as_mut_ptr()) },
+        DhowStatus::Ok
+    );
+}
