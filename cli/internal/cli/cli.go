@@ -23,6 +23,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -31,10 +32,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
+	"dhow/cli/internal/display"
 	"dhow/cli/internal/ffi"
 	"dhow/cli/internal/pack"
 	"dhow/cli/internal/render"
@@ -88,6 +92,8 @@ func Run(env Env) int {
 		err = runSend(env, args)
 	case "recv":
 		err = runRecv(env, args)
+	case "display":
+		err = runDisplay(env, args)
 	case "verify":
 		err = runVerify(env, args)
 	case "version":
@@ -124,6 +130,7 @@ Usage:
 Commands:
   keygen    generate an operator key
   send      encode a directory into a stream of QR frames
+  display   loop a frame stream on screen for a camera to read
   recv      decode captured frames back into a directory
   verify    check a received dataset against its transfer record
   version   print version and ABI information
@@ -663,4 +670,92 @@ func renderFrames(frames [][]byte, outDir string, version int, ecc byte, scale i
 		}
 	}
 	return nil
+}
+
+// --- display ---
+
+type displayResult struct {
+	SessionID   string `json:"session_id"`
+	Fingerprint string `json:"fingerprint"`
+	Frames      int    `json:"frames_shown"`
+	Loops       int    `json:"loops_completed"`
+	Seconds     int    `json:"seconds"`
+}
+
+func runDisplay(env Env, args []string) error {
+	fs := newFlagSet("display", env)
+	in := fs.String("in", "frames", "directory holding the frames to show")
+	fps := fs.Uint("fps", display.DefaultFPS, "frames per second")
+	loops := fs.Uint("loops", 0, "passes through the stream, or 0 to loop until stopped")
+	calibration := fs.Uint("calibration", 3, "seconds to hold the calibration pattern")
+	qrVersion := fs.Uint("qr-version", 0, "QR version 1..40, or 0 to fit each frame")
+	qrEcc := fs.String("qr-ecc", "M", "QR error correction: L, M, Q, or H")
+	noClear := fs.Bool("no-clear", false, "do not clear the terminal between frames")
+	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	if err := fs.Parse(args); err != nil {
+		return &exitError{code: ExitUsage, err: err}
+	}
+	if len(*qrEcc) != 1 {
+		return failf(ExitUsage, "-qr-ecc must be a single letter L, M, Q, or H")
+	}
+
+	record, err := readRecord(filepath.Join(*in, recordName))
+	if err != nil {
+		return err
+	}
+	sessionID, _, _, _, err := record.decode()
+	if err != nil {
+		return err
+	}
+
+	names, err := filepath.Glob(filepath.Join(*in, "frame-*.bin"))
+	if err != nil {
+		return failf(ExitInput, "listing frames in %s: %w", *in, err)
+	}
+	if len(names) == 0 {
+		return failf(ExitInput, "no frames found in %s", *in)
+	}
+	sort.Strings(names)
+
+	frames := make([][]byte, 0, len(names))
+	for _, name := range names {
+		frame, err := os.ReadFile(name)
+		if err != nil {
+			return failf(ExitInput, "reading %s: %w", name, err)
+		}
+		frames = append(frames, frame)
+	}
+
+	cfg := display.Config{
+		FPS:                int(*fps),
+		Loops:              int(*loops),
+		CalibrationSeconds: int(*calibration),
+		SessionID:          sessionID,
+		ClearScreen:        !*noClear,
+	}
+	if err := cfg.Validate(); err != nil {
+		return &exitError{code: ExitUsage, err: err}
+	}
+
+	// Ctrl-C ends a transfer normally: the sender cannot know when the
+	// receiver has enough, so the operator decides.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	stats, err := display.Run(ctx, env.Stdout, frames, cfg, int(*qrVersion), (*qrEcc)[0])
+	if err != nil {
+		return failf(ExitInput, "displaying frames: %w", err)
+	}
+
+	return emit(env.Stderr, *asJSON,
+		displayResult{
+			SessionID:   record.SessionID,
+			Fingerprint: display.Fingerprint(sessionID),
+			Frames:      stats.FramesShown,
+			Loops:       stats.LoopsCompleted,
+			Seconds:     int(stats.Elapsed.Seconds()),
+		},
+		fmt.Sprintf("\nsession     %s\nfingerprint %s\nshown       %d frames over %d passes in %ds\n",
+			record.SessionID, display.Fingerprint(sessionID),
+			stats.FramesShown, stats.LoopsCompleted, int(stats.Elapsed.Seconds())))
 }
