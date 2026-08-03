@@ -51,6 +51,14 @@ pub enum DhowStatus {
     Internal = -10,
     /// A panic was caught at the ABI boundary. Always a bug in this library.
     Panic = -11,
+    /// A resume state was malformed, or did not describe the journal replayed
+    /// against it.
+    ///
+    /// Distinct from [`DhowStatus::VerificationFailed`] because the two mean
+    /// opposite things to an operator: a failed verification says the transfer
+    /// is bad, while a rejected resume says only that the saved progress is
+    /// unusable and the transfer can be restarted.
+    ResumeRejected = -12,
 }
 
 thread_local! {
@@ -135,6 +143,7 @@ pub extern "C" fn dhow_status_string(status: c_int) -> *const c_char {
         -9 => "key operation failed\0",
         -10 => "internal error\0",
         -11 => "panic caught at ABI boundary\0",
+        -12 => "resume state rejected\0",
         _ => "unknown status\0",
     };
     text.as_ptr() as *const c_char
