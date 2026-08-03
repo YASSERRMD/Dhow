@@ -62,6 +62,9 @@ run_gate "ABI drift" \
 run_gate "build rust core for cgo" \
     bash -c "cd '$CORE_DIR' && cargo build --release -p dhow-ffi"
 
+run_gate "gofmt --check" \
+    bash -c "cd '$CLI_DIR' && test -z \"\$(gofmt -l .)\" || { gofmt -l .; false; }"
+
 run_gate "go vet" \
     bash -c "cd '$CLI_DIR' && go vet ./..."
 

@@ -284,7 +284,6 @@ func runKeygen(env Env, args []string) error {
 			"keep this file secret; both operators need the same key\n", *out))
 }
 
-
 // loadKey opens the operator key, turning the core's diagnosis into an
 // instruction.
 //
