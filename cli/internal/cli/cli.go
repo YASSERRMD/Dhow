@@ -158,6 +158,59 @@ func newFlagSet(name string, env Env) *flag.FlagSet {
 	return fs
 }
 
+// verbosity controls how much a command says while it works.
+//
+// It governs commentary only. Results still go to stdout and errors still go
+// to stderr at every level, because a script that pipes one and reads the
+// other must not have its data silenced by a display preference. -quiet
+// suppresses the summary a person reads; it never suppresses a failure.
+type verbosity int
+
+const (
+	// quiet prints nothing but errors. An exit code is the whole report.
+	quiet verbosity = iota - 1
+	// normal prints the end-of-command summary.
+	normal
+	// loud adds progress and detail while the command runs.
+	loud
+)
+
+// verbosityFlags registers -quiet and -verbose on a flag set.
+//
+// Returns a function that resolves them after parsing, because the two can be
+// given together and something has to decide what that means.
+func verbosityFlags(fs *flag.FlagSet) func() (verbosity, error) {
+	q := fs.Bool("quiet", false, "print nothing but errors")
+	v := fs.Bool("verbose", false, "print progress and detail while working")
+	return func() (verbosity, error) {
+		switch {
+		case *q && *v:
+			// Guessing which one the operator meant would make the tool
+			// unpredictable in exactly the situation where they are already
+			// unsure what it is doing.
+			return normal, errors.New("-quiet and -verbose contradict each other; pass at most one")
+		case *q:
+			return quiet, nil
+		case *v:
+			return loud, nil
+		default:
+			return normal, nil
+		}
+	}
+}
+
+// say writes commentary at or above the given level.
+//
+// Commentary goes to stderr so stdout carries only results, which is what lets
+// `dhow send -json | jq` work while a person still sees what happened.
+func (v verbosity) say(w io.Writer, level verbosity, format string, args ...any) {
+	if v < level {
+		return
+	}
+	// Commentary that cannot be written is not worth failing a transfer over.
+	_, _ = fmt.Fprintf(w, format, args...)
+}
+
 // emit writes a result as JSON or as human-readable lines.
 func emit(w io.Writer, asJSON bool, payload any, human string) error {
 	if asJSON {
