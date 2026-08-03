@@ -799,11 +799,13 @@ func runRecv(env Env, args []string) error {
 	}
 	defer manifest.Close()
 
-	sessionID, salt, nonce, params, inventory, err := manifestFields(manifest)
+	transfer, err := manifestFields(manifest)
 	if err != nil {
 		return err
 	}
-	sessionHex := hex.EncodeToString(sessionID[:])
+	sessionID, salt, nonce := transfer.SessionID, transfer.Salt, transfer.Nonce
+	params := transfer.Params
+	sessionHex := transfer.SessionHex()
 
 	key, err := loadKey(*keyPath)
 	if err != nil {
@@ -956,7 +958,7 @@ func runRecv(env Env, args []string) error {
 	// manifest. A sender whose packing and manifest-building disagreed would
 	// produce exactly that, and the receiver is the last place it can be
 	// noticed before the dataset is handed to someone.
-	if err := reconcile(entries, inventory); err != nil {
+	if err := reconcile(entries, transfer.Inventory); err != nil {
 		return err
 	}
 
@@ -1188,11 +1190,12 @@ func runVerify(env Env, args []string) error {
 	}
 	defer manifest.Close()
 
-	sessionID, _, _, _, inventory, err := manifestFields(manifest)
+	transfer, err := manifestFields(manifest)
 	if err != nil {
 		return err
 	}
-	sessionHex := hex.EncodeToString(sessionID[:])
+	sessionHex := transfer.SessionHex()
+	inventory := transfer.Inventory
 
 	signer, err := manifestSigner(*signerPath)
 	if err != nil {
@@ -1443,40 +1446,45 @@ func runVersion(env Env, args []string) error {
 
 // --- signed manifest ---
 
-// manifestFields pulls everything a command needs out of a verified manifest.
+// transfer is everything a command needs out of a verified manifest.
 //
-// One function rather than five call sites reading five accessors, because
-// every command needs the same set and a command that read four of them would
-// be one that silently ignored a field the sender signed.
-func manifestFields(m *ffi.Manifest) (
-	sessionID [16]byte,
-	salt [32]byte,
-	nonce [24]byte,
-	params ffi.SessionParams,
-	inventory []ffi.FileEntry,
-	err error,
-) {
-	if sessionID, err = m.SessionID(); err != nil {
-		err = failf(ExitInternal, "reading the manifest session id: %w", err)
-		return
+// Read as one set rather than field by field at each call site, because every
+// command needs all of it and one that read four of the five would be one that
+// silently ignored something the sender signed.
+type transfer struct {
+	SessionID [16]byte
+	Salt      [32]byte
+	Nonce     [24]byte
+	Params    ffi.SessionParams
+	Inventory []ffi.FileEntry
+}
+
+// SessionHex renders the session identifier for display.
+func (t *transfer) SessionHex() string {
+	return hex.EncodeToString(t.SessionID[:])
+}
+
+// manifestFields reads a verified manifest into a transfer.
+func manifestFields(m *ffi.Manifest) (*transfer, error) {
+	var t transfer
+	var err error
+
+	if t.SessionID, err = m.SessionID(); err != nil {
+		return nil, failf(ExitInternal, "reading the manifest session id: %w", err)
 	}
-	if salt, err = m.Salt(); err != nil {
-		err = failf(ExitInternal, "reading the manifest salt: %w", err)
-		return
+	if t.Salt, err = m.Salt(); err != nil {
+		return nil, failf(ExitInternal, "reading the manifest salt: %w", err)
 	}
-	if nonce, err = m.Nonce(); err != nil {
-		err = failf(ExitInternal, "reading the manifest nonce: %w", err)
-		return
+	if t.Nonce, err = m.Nonce(); err != nil {
+		return nil, failf(ExitInternal, "reading the manifest nonce: %w", err)
 	}
-	if params, err = m.Params(); err != nil {
-		err = failf(ExitInternal, "reading the manifest session parameters: %w", err)
-		return
+	if t.Params, err = m.Params(); err != nil {
+		return nil, failf(ExitInternal, "reading the manifest session parameters: %w", err)
 	}
-	if inventory, err = m.Files(); err != nil {
-		err = failf(ExitInternal, "reading the manifest inventory: %w", err)
-		return
+	if t.Inventory, err = m.Files(); err != nil {
+		return nil, failf(ExitInternal, "reading the manifest inventory: %w", err)
 	}
-	return
+	return &t, nil
 }
 
 // manifestSigner returns the fingerprint of the identity a manifest was checked

@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
+
+	"dhow/cli/internal/ffi"
 )
 
 // run invokes the CLI and returns its exit code, stdout, and stderr.
@@ -40,14 +43,33 @@ func fixture(t *testing.T) string {
 	return root
 }
 
-// keygen produces an operator key and returns its path.
+// keygen produces the two keys a transfer needs and returns the operator key's
+// path.
+//
+// The signing identity goes in the same directory under the standard names, so
+// identityBeside and signerBeside can find it from any sibling path. Almost
+// every test here needs both keys and cares about neither, and threading two
+// more paths through every call would bury what each test is actually about.
 func keygen(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "operator.key")
 	if code, _, errOut := run("keygen", "-out", path); code != ExitOK {
 		t.Fatalf("keygen exited %d: %s", code, errOut)
 	}
+	if code, _, errOut := run("keygen", "-kind", "identity", "-out", identityBeside(path)); code != ExitOK {
+		t.Fatalf("keygen -kind identity exited %d: %s", code, errOut)
+	}
 	return path
+}
+
+// identityBeside names the signing identity sitting beside a path.
+func identityBeside(path string) string {
+	return filepath.Join(filepath.Dir(path), "sender.key")
+}
+
+// signerBeside names the public identity sitting beside a path.
+func signerBeside(path string) string {
+	return filepath.Join(filepath.Dir(path), "sender.pub")
 }
 
 // listFiles returns every regular file under root, relative and sorted.
@@ -196,10 +218,10 @@ func TestSendRecvRoundTrip(t *testing.T) {
 	frames := filepath.Join(dir, "frames")
 	dest := filepath.Join(dir, "received")
 
-	if code, _, errOut := run("send", "-key", key, "-in", src, "-out", frames); code != ExitOK {
+	if code, _, errOut := run("send", "-key", key, "-identity", identityBeside(key), "-in", src, "-out", frames); code != ExitOK {
 		t.Fatalf("send exited %d: %s", code, errOut)
 	}
-	if code, _, errOut := run("recv", "-key", key, "-in", frames, "-out", dest); code != ExitOK {
+	if code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frames, "-out", dest); code != ExitOK {
 		t.Fatalf("recv exited %d: %s", code, errOut)
 	}
 
@@ -227,7 +249,7 @@ func TestSendRecvSurvivesDroppedFrames(t *testing.T) {
 	frames := filepath.Join(dir, "frames")
 	dest := filepath.Join(dir, "received")
 
-	if code, _, errOut := run("send", "-key", key, "-in", src, "-out", frames); code != ExitOK {
+	if code, _, errOut := run("send", "-key", key, "-identity", identityBeside(key), "-in", src, "-out", frames); code != ExitOK {
 		t.Fatalf("send exited %d: %s", code, errOut)
 	}
 
@@ -245,7 +267,7 @@ func TestSendRecvSurvivesDroppedFrames(t *testing.T) {
 		}
 	}
 
-	if code, _, errOut := run("recv", "-key", key, "-in", frames, "-out", dest); code != ExitOK {
+	if code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frames, "-out", dest); code != ExitOK {
 		t.Fatalf("recv exited %d after frame loss: %s", code, errOut)
 	}
 	if len(listFiles(t, dest)) != len(listFiles(t, src)) {
@@ -262,7 +284,7 @@ func TestRecvWithWrongKeyIsIncompleteNotCorrupt(t *testing.T) {
 	src := fixture(t)
 	frames := filepath.Join(dir, "frames")
 
-	if code, _, errOut := run("send", "-key", key, "-in", src, "-out", frames); code != ExitOK {
+	if code, _, errOut := run("send", "-key", key, "-identity", identityBeside(key), "-in", src, "-out", frames); code != ExitOK {
 		t.Fatalf("send exited %d: %s", code, errOut)
 	}
 
@@ -272,7 +294,7 @@ func TestRecvWithWrongKeyIsIncompleteNotCorrupt(t *testing.T) {
 	}
 
 	dest := filepath.Join(dir, "received")
-	code, _, _ := run("recv", "-key", wrong, "-in", frames, "-out", dest)
+	code, _, _ := run("recv", "-key", wrong, "-signer", signerBeside(wrong), "-in", frames, "-out", dest)
 	if code != ExitIncomplete {
 		t.Errorf("exit = %d, want %d", code, ExitIncomplete)
 	}
@@ -287,7 +309,7 @@ func TestRecvRejectsTamperedFrames(t *testing.T) {
 	src := fixture(t)
 	frames := filepath.Join(dir, "frames")
 
-	if code, _, errOut := run("send", "-key", key, "-in", src, "-out", frames); code != ExitOK {
+	if code, _, errOut := run("send", "-key", key, "-identity", identityBeside(key), "-in", src, "-out", frames); code != ExitOK {
 		t.Fatalf("send exited %d: %s", code, errOut)
 	}
 
@@ -304,7 +326,7 @@ func TestRecvRejectsTamperedFrames(t *testing.T) {
 		}
 	}
 
-	code, _, _ := run("recv", "-key", key, "-in", frames, "-out", filepath.Join(dir, "received"))
+	code, _, _ := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frames, "-out", filepath.Join(dir, "received"))
 	if code != ExitIncomplete {
 		t.Errorf("exit = %d, want %d", code, ExitIncomplete)
 	}
@@ -315,7 +337,7 @@ func TestSendJSONOutputIsParseable(t *testing.T) {
 	key := keygen(t, dir)
 	src := fixture(t)
 
-	code, out, errOut := run("send", "-key", key, "-in", src,
+	code, out, errOut := run("send", "-key", key, "-identity", identityBeside(key), "-in", src,
 		"-out", filepath.Join(dir, "frames"), "-json")
 	if code != ExitOK {
 		t.Fatalf("exit = %d: %s", code, errOut)
@@ -340,10 +362,10 @@ func TestVerifySucceedsOnGoodOutput(t *testing.T) {
 	frames := filepath.Join(dir, "frames")
 	dest := filepath.Join(dir, "received")
 
-	run("send", "-key", key, "-in", src, "-out", frames)
-	run("recv", "-key", key, "-in", frames, "-out", dest)
+	run("send", "-key", key, "-identity", identityBeside(key), "-in", src, "-out", frames)
+	run("recv", "-key", key, "-signer", signerBeside(key), "-in", frames, "-out", dest)
 
-	code, out, errOut := run("verify", "-in", frames, "-dir", dest)
+	code, out, errOut := run("verify", "-in", frames, "-signer", signerBeside(frames), "-dir", dest)
 	if code != ExitOK {
 		t.Fatalf("verify exited %d: %s", code, errOut)
 	}
@@ -359,14 +381,14 @@ func TestVerifyFailsOnMissingFile(t *testing.T) {
 	frames := filepath.Join(dir, "frames")
 	dest := filepath.Join(dir, "received")
 
-	run("send", "-key", key, "-in", src, "-out", frames)
-	run("recv", "-key", key, "-in", frames, "-out", dest)
+	run("send", "-key", key, "-identity", identityBeside(key), "-in", src, "-out", frames)
+	run("recv", "-key", key, "-signer", signerBeside(key), "-in", frames, "-out", dest)
 
 	if err := os.Remove(filepath.Join(dest, "readme.md")); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 
-	code, _, _ := run("verify", "-in", frames, "-dir", dest)
+	code, _, _ := run("verify", "-in", frames, "-signer", signerBeside(frames), "-dir", dest)
 	if code != ExitVerifyFailed {
 		t.Errorf("exit = %d, want %d", code, ExitVerifyFailed)
 	}
@@ -378,9 +400,9 @@ func TestVerifyJSONReportsProblems(t *testing.T) {
 	src := fixture(t)
 	frames := filepath.Join(dir, "frames")
 
-	run("send", "-key", key, "-in", src, "-out", frames)
+	run("send", "-key", key, "-identity", identityBeside(key), "-in", src, "-out", frames)
 
-	code, out, _ := run("verify", "-in", frames, "-dir", filepath.Join(dir, "absent"), "-json")
+	code, out, _ := run("verify", "-in", frames, "-signer", signerBeside(frames), "-dir", filepath.Join(dir, "absent"), "-json")
 	if code != ExitVerifyFailed {
 		t.Errorf("exit = %d, want %d", code, ExitVerifyFailed)
 	}
@@ -428,10 +450,10 @@ func TestSendRejectsInvalidCodingParameters(t *testing.T) {
 	src := fixture(t)
 
 	for _, args := range [][]string{
-		{"send", "-key", key, "-in", src, "-symbol-size", "8"},
-		{"send", "-key", key, "-in", src, "-symbol-size", "70000"},
-		{"send", "-key", key, "-in", src, "-blocks", "0"},
-		{"send", "-key", key, "-in", src, "-blocks", "99999"},
+		{"send", "-key", key, "-identity", identityBeside(key), "-in", src, "-symbol-size", "8"},
+		{"send", "-key", key, "-identity", identityBeside(key), "-in", src, "-symbol-size", "70000"},
+		{"send", "-key", key, "-identity", identityBeside(key), "-in", src, "-blocks", "0"},
+		{"send", "-key", key, "-identity", identityBeside(key), "-in", src, "-blocks", "99999"},
 	} {
 		if code, _, _ := run(args...); code != ExitUsage {
 			t.Errorf("%v: exit = %d, want %d", args[4:], code, ExitUsage)
@@ -439,31 +461,31 @@ func TestSendRejectsInvalidCodingParameters(t *testing.T) {
 	}
 }
 
-func TestTransferRecordCarriesNoSecret(t *testing.T) {
-	// The record travels beside the frames, so it must contain nothing that
-	// would let an observer read the payload.
+func TestManifestCarriesNoSecret(t *testing.T) {
+	// The manifest travels beside the frames and is not encrypted - the salt
+	// and nonce in it are public by design - so it must contain nothing that
+	// would let an observer read the payload or forge a transfer.
 	dir := t.TempDir()
 	key := keygen(t, dir)
 	src := fixture(t)
 	frames := filepath.Join(dir, "frames")
 
-	run("send", "-key", key, "-in", src, "-out", frames)
+	run("send", "-key", key, "-identity", identityBeside(key), "-in", src, "-out", frames)
 
-	data, err := os.ReadFile(filepath.Join(frames, recordName))
+	data, err := os.ReadFile(filepath.Join(frames, manifestName))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	keyBytes, err := os.ReadFile(key)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	// The key file's material sits after its 8-byte header.
-	if bytes.Contains(data, keyBytes[8:40]) {
-		t.Error("the transfer record contained operator key material")
-	}
-	for _, forbidden := range []string{"operator_key", "session_key", "payload_key"} {
-		if bytes.Contains(bytes.ToLower(data), []byte(forbidden)) {
-			t.Errorf("the transfer record mentioned %q", forbidden)
+
+	// The key files' material sits after an 8-byte header. Neither the
+	// operator key nor the identity's seed may appear.
+	for _, secret := range []string{key, identityBeside(key)} {
+		keyBytes, err := os.ReadFile(secret)
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if bytes.Contains(data, keyBytes[8:40]) {
+			t.Errorf("the manifest contained the key material from %s", filepath.Base(secret))
 		}
 	}
 }
@@ -490,7 +512,7 @@ func sendFixture(t *testing.T, blocks string) (key, frameDir, dataDir string) {
 	}
 	frameDir = filepath.Join(work, "frames")
 
-	code, _, errOut := run("send", "-key", key, "-in", dataDir,
+	code, _, errOut := run("send", "-key", key, "-identity", identityBeside(key), "-in", dataDir,
 		"-out", frameDir, "-blocks", blocks, "-symbol-size", "256")
 	if code != ExitOK {
 		t.Fatalf("send exited %d: %s", code, errOut)
@@ -531,7 +553,7 @@ func TestRecvResumesAfterAnInterruption(t *testing.T) {
 
 	// Stop partway. The run must fail as incomplete and say where the
 	// progress went, because an operator who does not know that has lost it.
-	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir,
+	code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir,
 		"-state", stateDir, "-stop-after", "30", "-save-every", "10")
 	if code != ExitIncomplete {
 		t.Fatalf("interrupted recv exited %d, want %d: %s", code, ExitIncomplete, errOut)
@@ -547,7 +569,7 @@ func TestRecvResumesAfterAnInterruption(t *testing.T) {
 	}
 
 	// Resume. The transfer must complete and the dataset must come back whole.
-	code, out, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir,
+	code, out, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir,
 		"-state", stateDir)
 	if code != ExitOK {
 		t.Fatalf("resumed recv exited %d: %s", code, errOut)
@@ -574,14 +596,14 @@ func TestRecvResumesAcrossSeveralInterruptions(t *testing.T) {
 	outDir := filepath.Join(work, "received")
 
 	for _, limit := range []string{"20", "40", "60"} {
-		code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir,
+		code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir,
 			"-state", stateDir, "-stop-after", limit, "-save-every", "7")
 		if code != ExitIncomplete {
 			t.Fatalf("recv with -stop-after %s exited %d: %s", limit, code, errOut)
 		}
 	}
 
-	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir, "-state", stateDir)
+	code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir, "-state", stateDir)
 	if code != ExitOK {
 		t.Fatalf("final recv exited %d: %s", code, errOut)
 	}
@@ -595,7 +617,7 @@ func TestRecvWithoutStateDoesNotPersistAnything(t *testing.T) {
 	work := t.TempDir()
 	outDir := filepath.Join(work, "received")
 
-	code, out, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir)
+	code, out, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir)
 	if code != ExitOK {
 		t.Fatalf("recv exited %d: %s", code, errOut)
 	}
@@ -622,7 +644,7 @@ func interrupted(t *testing.T, key, frameDir string) (stateDir, outDir string) {
 	stateDir = filepath.Join(work, "state")
 	outDir = filepath.Join(work, "received")
 
-	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir,
+	code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir,
 		"-state", stateDir, "-stop-after", "25", "-save-every", "5")
 	if code != ExitIncomplete {
 		t.Fatalf("interrupted recv exited %d: %s", code, errOut)
@@ -654,7 +676,7 @@ func TestRecvRejectsATamperedIndex(t *testing.T) {
 	// to rewrite to make a doctored journal look expected.
 	flipByte(t, filepath.Join(stateDir, "resume.dhrs"), 40)
 
-	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir, "-state", stateDir)
+	code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir, "-state", stateDir)
 	if code != ExitInput {
 		t.Fatalf("recv with a tampered index exited %d, want %d: %s", code, ExitInput, errOut)
 	}
@@ -674,7 +696,7 @@ func TestRecvRejectsATamperedJournal(t *testing.T) {
 	// it on the way back in exactly as it would a corrupt capture.
 	flipByte(t, filepath.Join(stateDir, "journal.bin"), 60)
 
-	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir, "-state", stateDir)
+	code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir, "-state", stateDir)
 	if code != ExitInput {
 		t.Fatalf("recv with a tampered journal exited %d, want %d: %s", code, ExitInput, errOut)
 	}
@@ -698,7 +720,7 @@ func TestRecvRejectsATruncatedJournal(t *testing.T) {
 		t.Fatalf("Truncate: %v", err)
 	}
 
-	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir, "-state", stateDir)
+	code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir, "-state", stateDir)
 	if code != ExitInput {
 		t.Fatalf("recv with a truncated journal exited %d, want %d: %s", code, ExitInput, errOut)
 	}
@@ -711,13 +733,13 @@ func TestRecvRejectsStateFromAnotherSession(t *testing.T) {
 
 	work := t.TempDir()
 	otherFrames := filepath.Join(work, "frames")
-	code, _, errOut := run("send", "-key", key, "-in", fixture(t),
+	code, _, errOut := run("send", "-key", key, "-identity", identityBeside(key), "-in", fixture(t),
 		"-out", otherFrames, "-blocks", "2", "-symbol-size", "256")
 	if code != ExitOK {
 		t.Fatalf("send exited %d: %s", code, errOut)
 	}
 
-	code, _, errOut = run("recv", "-key", key, "-in", otherFrames,
+	code, _, errOut = run("recv", "-key", key, "-signer", signerBeside(key), "-in", otherFrames,
 		"-out", filepath.Join(work, "received"), "-state", stateDir)
 	if code != ExitInput {
 		t.Fatalf("recv with foreign state exited %d, want %d: %s", code, ExitInput, errOut)
@@ -733,7 +755,7 @@ func TestRecvKeepStateLeavesTheDirectoryPopulated(t *testing.T) {
 	stateDir := filepath.Join(work, "state")
 	outDir := filepath.Join(work, "received")
 
-	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir,
+	code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir,
 		"-state", stateDir, "-keep-state")
 	if code != ExitOK {
 		t.Fatalf("recv exited %d: %s", code, errOut)
@@ -751,7 +773,7 @@ func TestRecvRejectsAZeroSaveInterval(t *testing.T) {
 	key, frameDir, _ := sendFixture(t, "2")
 	work := t.TempDir()
 
-	code, _, errOut := run("recv", "-key", key, "-in", frameDir,
+	code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir,
 		"-out", filepath.Join(work, "received"),
 		"-state", filepath.Join(work, "state"), "-save-every", "0")
 	if code != ExitUsage {
@@ -763,7 +785,7 @@ func TestRecvJSONReportsResumeCounts(t *testing.T) {
 	key, frameDir, _ := sendFixture(t, "2")
 	stateDir, outDir := interrupted(t, key, frameDir)
 
-	code, out, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir,
+	code, out, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir,
 		"-state", stateDir, "-json")
 	if code != ExitOK {
 		t.Fatalf("recv exited %d: %s", code, errOut)
@@ -793,7 +815,7 @@ func TestRecvJSONReportsResumeCounts(t *testing.T) {
 // verified runs verify and returns its exit code and parsed JSON result.
 func verified(t *testing.T, frameDir, dir string) (int, verifyResult) {
 	t.Helper()
-	code, out, errOut := run("verify", "-in", frameDir, "-dir", dir, "-json")
+	code, out, errOut := run("verify", "-in", frameDir, "-signer", signerBeside(frameDir), "-dir", dir, "-json")
 	var result verifyResult
 	if out != "" {
 		if err := json.Unmarshal([]byte(out), &result); err != nil {
@@ -820,7 +842,7 @@ func received(t *testing.T) (frameDir, outDir, dataDir string) {
 	key, frameDir, dataDir := sendFixture(t, "2")
 	outDir = filepath.Join(t.TempDir(), "received")
 
-	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir)
+	code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir)
 	if code != ExitOK {
 		t.Fatalf("recv exited %d: %s", code, errOut)
 	}
@@ -944,15 +966,15 @@ func TestVerifyReportsALostExecutableBit(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	frameDir := filepath.Join(t.TempDir(), "frames")
-	code, _, errOut := run("send", "-key", key, "-in", dataDir, "-out", frameDir,
+	frameDir := filepath.Join(filepath.Dir(key), "frames-with-script")
+	code, _, errOut := run("send", "-key", key, "-identity", identityBeside(key), "-in", dataDir, "-out", frameDir,
 		"-blocks", "2", "-symbol-size", "256")
 	if code != ExitOK {
 		t.Fatalf("send exited %d: %s", code, errOut)
 	}
 
 	outDir := filepath.Join(t.TempDir(), "received")
-	if code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir); code != ExitOK {
+	if code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir); code != ExitOK {
 		t.Fatalf("recv exited %d: %s", code, errOut)
 	}
 	if code, result := verified(t, frameDir, outDir); code != ExitOK {
@@ -1021,35 +1043,63 @@ func TestVerifyReportsAnUnreadableDataset(t *testing.T) {
 	}
 }
 
-func TestVerifyRejectsAnOlderTransferRecord(t *testing.T) {
-	// A version 1 record has no inventory, so verifying against it would be
-	// the file count again. Refusing is the honest answer.
+func TestVerifyRejectsAnOlderManifestVersion(t *testing.T) {
+	// A v1 manifest carries no salt, no nonce, no coding parameters, and a
+	// payload digest computed over different bytes. There is nothing to
+	// convert, so refusing is the honest answer.
 	frameDir, outDir, _ := received(t)
 
-	path := filepath.Join(frameDir, recordName)
+	path := filepath.Join(frameDir, manifestName)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	raw["version"] = 1
-	patched, err := json.Marshal(raw)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	if err := os.WriteFile(path, patched, 0o644); err != nil {
+	data[4] = 1
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	code, _, errOut := run("verify", "-in", frameDir, "-dir", outDir)
-	if code != ExitInput {
-		t.Fatalf("verify with a v1 record exited %d, want %d: %s", code, ExitInput, errOut)
+	code, _, errOut := run("verify", "-in", frameDir, "-signer", signerBeside(frameDir), "-dir", outDir)
+	if code != ExitVerifyFailed {
+		t.Fatalf("verify with a v1 manifest exited %d, want %d: %s", code, ExitVerifyFailed, errOut)
 	}
-	if !strings.Contains(errOut, "version 2") {
-		t.Errorf("the error does not say which version this build reads: %s", errOut)
+	if !strings.Contains(errOut, "unsupported manifest version: 1") {
+		t.Errorf("the error does not name the version it refused: %s", errOut)
+	}
+}
+
+func TestFramesWithoutAManifestAreRefused(t *testing.T) {
+	frameDir, outDir, _ := received(t)
+	if err := os.Remove(filepath.Join(frameDir, manifestName)); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	code, _, errOut := run("verify", "-in", frameDir, "-signer", signerBeside(frameDir), "-dir", outDir)
+	if code != ExitInput {
+		t.Fatalf("verify without a manifest exited %d, want %d: %s", code, ExitInput, errOut)
+	}
+	if !strings.Contains(errOut, manifestName) {
+		t.Errorf("the error does not name the missing file: %s", errOut)
+	}
+}
+
+func TestALegacyTransferRecordIsNamedInTheError(t *testing.T) {
+	// A frames directory from a build that wrote transfer.json cannot be
+	// received. Saying so beats letting the operator wonder where it went.
+	frameDir, outDir, _ := received(t)
+	if err := os.Remove(filepath.Join(frameDir, manifestName)); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(frameDir, "transfer.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	code, _, errOut := run("verify", "-in", frameDir, "-signer", signerBeside(frameDir), "-dir", outDir)
+	if code != ExitInput {
+		t.Fatalf("verify exited %d, want %d: %s", code, ExitInput, errOut)
+	}
+	if !strings.Contains(errOut, "dhow send") {
+		t.Errorf("the error does not say what to do about it: %s", errOut)
 	}
 }
 
@@ -1063,8 +1113,17 @@ func TestEveryDocumentedExitCodeIsProducedBySomething(t *testing.T) {
 	outDir := filepath.Join(work, "received")
 	missing := filepath.Join(work, "nowhere")
 
+	signer := signerBeside(key)
+
+	// A second identity, so exit 3 has a cause that is not a damaged file.
+	stranger := filepath.Join(work, "stranger.pub")
+	if code, _, errOut := run("keygen", "-kind", "identity",
+		"-out", filepath.Join(work, "stranger.key")); code != ExitOK {
+		t.Fatalf("keygen exited %d: %s", code, errOut)
+	}
+
 	// Set up a good receive, so the verify cases have something to damage.
-	if code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir); code != ExitOK {
+	if code, _, errOut := run("recv", "-key", key, "-signer", signer, "-in", frameDir, "-out", outDir); code != ExitOK {
 		t.Fatalf("recv exited %d: %s", code, errOut)
 	}
 
@@ -1073,15 +1132,17 @@ func TestEveryDocumentedExitCodeIsProducedBySomething(t *testing.T) {
 		want int
 		args []string
 	}{
-		{"success", ExitOK, []string{"verify", "-in", frameDir, "-dir", outDir}},
+		{"success", ExitOK, []string{"verify", "-in", frameDir, "-signer", signer, "-dir", outDir}},
 		{"no command", ExitUsage, nil},
 		{"unknown command", ExitUsage, []string{"transmogrify"}},
 		{"unknown flag", ExitUsage, []string{"send", "-nonsense"}},
 		{"missing required flag", ExitUsage, []string{"send", "-key", key}},
-		{"contradictory verbosity", ExitUsage, []string{"verify", "-in", frameDir, "-dir", outDir, "-quiet", "-verbose"}},
-		{"missing key file", ExitInput, []string{"recv", "-key", filepath.Join(missing, "k"), "-in", frameDir, "-out", filepath.Join(work, "a")}},
-		{"missing frame directory", ExitInput, []string{"recv", "-key", key, "-in", missing, "-out", filepath.Join(work, "b")}},
-		{"missing dataset", ExitVerifyFailed, []string{"verify", "-in", frameDir, "-dir", missing}},
+		{"contradictory verbosity", ExitUsage, []string{"verify", "-in", frameDir, "-signer", signer, "-dir", outDir, "-quiet", "-verbose"}},
+		{"missing key file", ExitInput, []string{"recv", "-key", filepath.Join(missing, "k"), "-signer", signer, "-in", frameDir, "-out", filepath.Join(work, "a")}},
+		{"missing frame directory", ExitInput, []string{"recv", "-key", key, "-signer", signer, "-in", missing, "-out", filepath.Join(work, "b")}},
+		{"missing signer", ExitInput, []string{"recv", "-key", key, "-signer", filepath.Join(missing, "s.pub"), "-in", frameDir, "-out", filepath.Join(work, "c")}},
+		{"unverifiable manifest", ExitVerifyFailed, []string{"recv", "-key", key, "-signer", stranger, "-in", frameDir, "-out", filepath.Join(work, "d")}},
+		{"missing dataset", ExitVerifyFailed, []string{"verify", "-in", frameDir, "-signer", signer, "-dir", missing}},
 	}
 
 	for _, tc := range cases {
@@ -1097,7 +1158,7 @@ func TestIncompleteTransferExitsFour(t *testing.T) {
 	key, frameDir, _ := sendFixture(t, "2")
 	work := t.TempDir()
 
-	code, _, errOut := run("recv", "-key", key, "-in", frameDir,
+	code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir,
 		"-out", filepath.Join(work, "received"),
 		"-state", filepath.Join(work, "state"), "-stop-after", "5")
 	if code != ExitIncomplete {
@@ -1111,14 +1172,14 @@ func TestFailureAlwaysReachesStderrEvenWhenQuiet(t *testing.T) {
 	key, frameDir, _ := sendFixture(t, "2")
 	work := t.TempDir()
 	outDir := filepath.Join(work, "received")
-	if code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir); code != ExitOK {
+	if code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir); code != ExitOK {
 		t.Fatalf("recv exited %d: %s", code, errOut)
 	}
 	if err := os.Remove(filepath.Join(outDir, "readme.md")); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 
-	code, out, errOut := run("verify", "-in", frameDir, "-dir", outDir, "-quiet")
+	code, out, errOut := run("verify", "-in", frameDir, "-signer", signerBeside(frameDir), "-dir", outDir, "-quiet")
 	if code != ExitVerifyFailed {
 		t.Fatalf("verify exited %d, want %d", code, ExitVerifyFailed)
 	}
@@ -1136,7 +1197,7 @@ func TestQuietSuppressesTheSummaryButNotTheResult(t *testing.T) {
 	key, frameDir, _ := sendFixture(t, "2")
 	work := t.TempDir()
 
-	code, out, _ := run("recv", "-key", key, "-in", frameDir,
+	code, out, _ := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir,
 		"-out", filepath.Join(work, "received"), "-quiet")
 	if code != ExitOK {
 		t.Fatalf("recv -quiet exited %d", code)
@@ -1158,7 +1219,7 @@ func TestQuietDoesNotSuppressJSON(t *testing.T) {
 	key, frameDir, _ := sendFixture(t, "2")
 	work := t.TempDir()
 
-	code, out, errOut := run("recv", "-key", key, "-in", frameDir,
+	code, out, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir,
 		"-out", filepath.Join(work, "received"), "-quiet", "-json")
 	if code != ExitOK {
 		t.Fatalf("recv exited %d: %s", code, errOut)
@@ -1176,9 +1237,9 @@ func TestVerboseAddsCommentaryWithoutChangingTheResult(t *testing.T) {
 	key, frameDir, _ := sendFixture(t, "2")
 	work := t.TempDir()
 
-	plainCode, plainOut, plainErr := run("recv", "-key", key, "-in", frameDir,
+	plainCode, plainOut, plainErr := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir,
 		"-out", filepath.Join(work, "a"), "-json")
-	loudCode, loudOut, loudErr := run("recv", "-key", key, "-in", frameDir,
+	loudCode, loudOut, loudErr := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir,
 		"-out", filepath.Join(work, "b"), "-json", "-verbose")
 
 	if plainCode != ExitOK || loudCode != ExitOK {
@@ -1241,11 +1302,14 @@ func TestHelpDocumentsEveryExitCodeTheCodeDefines(t *testing.T) {
 }
 
 func TestKeyErrorsNameTheirFix(t *testing.T) {
-	_, frameDir, _ := sendFixture(t, "2")
+	// The signer stays correct throughout: this is about the operator key's
+	// diagnostics, and a wrong signer would fail earlier and hide them.
+	good, frameDir, _ := sendFixture(t, "2")
+	signer := signerBeside(good)
 	work := t.TempDir()
 
 	missing := filepath.Join(work, "absent.key")
-	code, _, errOut := run("recv", "-key", missing, "-in", frameDir, "-out", filepath.Join(work, "a"))
+	code, _, errOut := run("recv", "-key", missing, "-signer", signer, "-in", frameDir, "-out", filepath.Join(work, "a"))
 	if code != ExitInput {
 		t.Fatalf("missing key exited %d, want %d", code, ExitInput)
 	}
@@ -1263,7 +1327,7 @@ func TestKeyErrorsNameTheirFix(t *testing.T) {
 		t.Fatalf("Chmod: %v", err)
 	}
 
-	code, _, errOut = run("recv", "-key", permissive, "-in", frameDir, "-out", filepath.Join(work, "b"))
+	code, _, errOut = run("recv", "-key", permissive, "-signer", signer, "-in", frameDir, "-out", filepath.Join(work, "b"))
 	if code != ExitInput {
 		t.Fatalf("permissive key exited %d, want %d", code, ExitInput)
 	}
@@ -1279,7 +1343,7 @@ func TestVerboseWarnsEarlyWhenNothingAuthenticates(t *testing.T) {
 	// The wrong key looks exactly like a bad camera angle until the stream
 	// ends, which on a real capture is hours. Saying so at fifty rejections
 	// turns a wasted afternoon into a wasted minute.
-	_, frameDir, _ := sendFixture(t, "2")
+	good, frameDir, _ := sendFixture(t, "2")
 	work := t.TempDir()
 
 	other := filepath.Join(work, "other.key")
@@ -1287,7 +1351,10 @@ func TestVerboseWarnsEarlyWhenNothingAuthenticates(t *testing.T) {
 		t.Fatalf("keygen exited %d: %s", code, errOut)
 	}
 
-	code, _, errOut := run("recv", "-key", other, "-in", frameDir,
+	// The manifest still verifies; only the operator key is wrong. That is the
+	// case this warning exists for, and it is not the same as an unverifiable
+	// manifest, which fails before a frame is read.
+	code, _, errOut := run("recv", "-key", other, "-signer", signerBeside(good), "-in", frameDir,
 		"-out", filepath.Join(work, "received"), "-verbose")
 	if code != ExitIncomplete {
 		t.Fatalf("recv with the wrong key exited %d, want %d", code, ExitIncomplete)
@@ -1302,7 +1369,7 @@ func TestNoWrongKeyWarningOnAGoodTransfer(t *testing.T) {
 	// on the run where it matters.
 	key, frameDir, _ := sendFixture(t, "2")
 
-	code, _, errOut := run("recv", "-key", key, "-in", frameDir,
+	code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir,
 		"-out", filepath.Join(t.TempDir(), "received"), "-verbose")
 	if code != ExitOK {
 		t.Fatalf("recv exited %d: %s", code, errOut)
@@ -1321,7 +1388,7 @@ func TestRecvRefusesAnExistingOutputDirectory(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 
-	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir)
+	code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir)
 	if code != ExitInput {
 		t.Fatalf("recv into an existing directory exited %d, want %d: %s", code, ExitInput, errOut)
 	}
@@ -1345,7 +1412,7 @@ func TestFailedExtractionLeavesNothingBehind(t *testing.T) {
 	}
 	outDir := filepath.Join(blocker, "received")
 
-	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir)
+	code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir)
 	if code == ExitOK {
 		t.Fatalf("recv succeeded into an impossible path: %s", errOut)
 	}
@@ -1359,7 +1426,7 @@ func TestSuccessfulExtractionLeavesNoStagingDirectory(t *testing.T) {
 	work := t.TempDir()
 	outDir := filepath.Join(work, "received")
 
-	if code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir); code != ExitOK {
+	if code, _, errOut := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir); code != ExitOK {
 		t.Fatalf("recv exited %d: %s", code, errOut)
 	}
 	sameTree(t, dataDir, outDir)
@@ -1374,5 +1441,348 @@ func TestSuccessfulExtractionLeavesNoStagingDirectory(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Errorf("recv left %v beside its output, want only \"received\"", names)
+	}
+}
+
+// --- The signed manifest ---
+//
+// These are the cases the signature exists for. Everything above this point
+// would pass just as well against the unsigned transfer record the manifest
+// replaced, which is exactly why they are not enough on their own.
+
+func TestKeygenIdentityWritesBothHalves(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "sender.key")
+
+	code, stdout, errOut := run("keygen", "-kind", "identity", "-out", out)
+	if code != ExitOK {
+		t.Fatalf("keygen exited %d: %s", code, errOut)
+	}
+
+	info, err := os.Stat(out)
+	if err != nil {
+		t.Fatalf("the secret half was not written: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		t.Errorf("the identity was written mode %04o; it must not be readable by others", perm)
+	}
+
+	// sender.key, not sender.key.pub: the receiving side's -signer default is
+	// sender.pub, and a mismatch here turns a first transfer into a debugging
+	// session.
+	pub := filepath.Join(dir, "sender.pub")
+	if _, err := os.Stat(pub); err != nil {
+		t.Fatalf("the public half was not written to %s: %v", pub, err)
+	}
+
+	if !strings.Contains(stdout, "fingerprint ") {
+		t.Errorf("keygen did not print the fingerprint operators are told to compare: %s", stdout)
+	}
+	if !strings.Contains(stdout, "never leaves the sending machine") {
+		t.Errorf("keygen did not say the secret half stays put: %s", stdout)
+	}
+}
+
+func TestKeygenIdentityJSONNamesBothPaths(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "sender.key")
+
+	code, stdout, errOut := run("keygen", "-kind", "identity", "-out", out, "-json")
+	if code != ExitOK {
+		t.Fatalf("keygen exited %d: %s", code, errOut)
+	}
+
+	var result keygenResult
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("parsing keygen JSON: %v\n%s", err, stdout)
+	}
+	if result.Kind != kindIdentity {
+		t.Errorf("kind = %q, want %q", result.Kind, kindIdentity)
+	}
+	if result.PublicPath != filepath.Join(dir, "sender.pub") {
+		t.Errorf("public_path = %q", result.PublicPath)
+	}
+	if result.Fingerprint == "" {
+		t.Error("the JSON result carries no fingerprint")
+	}
+}
+
+func TestKeygenRejectsAnUnknownKind(t *testing.T) {
+	code, _, errOut := run("keygen", "-kind", "wizard", "-out", filepath.Join(t.TempDir(), "k"))
+	if code != ExitUsage {
+		t.Fatalf("exit = %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(errOut, kindOperator) || !strings.Contains(errOut, kindIdentity) {
+		t.Errorf("the error does not name the kinds that are accepted: %s", errOut)
+	}
+}
+
+func TestKeygenIdentityRefusesToClobber(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "sender.key")
+	if code, _, errOut := run("keygen", "-kind", "identity", "-out", out); code != ExitOK {
+		t.Fatalf("keygen exited %d: %s", code, errOut)
+	}
+	if code, _, _ := run("keygen", "-kind", "identity", "-out", out); code != ExitInput {
+		t.Errorf("keygen overwrote an identity without -force: exit %d", code)
+	}
+	if code, _, errOut := run("keygen", "-kind", "identity", "-out", out, "-force"); code != ExitOK {
+		t.Errorf("keygen -force exited %d: %s", code, errOut)
+	}
+}
+
+func TestSendRefusesAnOperatorKeyAsAnIdentity(t *testing.T) {
+	// The two kinds are recorded in the key file. Signing with a key both
+	// operators hold would prove nothing about who produced the transfer, so
+	// the confusion has to be caught rather than tolerated.
+	dir := t.TempDir()
+	key := keygen(t, dir)
+
+	code, _, errOut := run("send", "-key", key, "-identity", key,
+		"-in", fixture(t), "-out", filepath.Join(dir, "frames"))
+	if code != ExitInput {
+		t.Fatalf("send with an operator key as the identity exited %d, want %d", code, ExitInput)
+	}
+	if !strings.Contains(errOut, "identity") {
+		t.Errorf("the error does not say which argument was wrong: %s", errOut)
+	}
+}
+
+func TestSendReportsTheSignerFingerprint(t *testing.T) {
+	// The sending operator reads this out so the receiving one can confirm
+	// they hold the matching public half. It has to be there to be read.
+	dir := t.TempDir()
+	key := keygen(t, dir)
+
+	code, stdout, errOut := run("send", "-key", key, "-identity", identityBeside(key),
+		"-in", fixture(t), "-out", filepath.Join(dir, "frames"), "-json")
+	if code != ExitOK {
+		t.Fatalf("send exited %d: %s", code, errOut)
+	}
+	var result sendResult
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("parsing send JSON: %v\n%s", err, stdout)
+	}
+	if !regexp.MustCompile(`^([0-9a-f]{2}:){7}[0-9a-f]{2}$`).MatchString(result.Signer) {
+		t.Errorf("signer = %q, want a colon-separated fingerprint", result.Signer)
+	}
+}
+
+func TestRecvRejectsAManifestSignedByAnotherIdentity(t *testing.T) {
+	key, frameDir, _ := sendFixture(t, "2")
+	work := t.TempDir()
+
+	if code, _, errOut := run("keygen", "-kind", "identity",
+		"-out", filepath.Join(work, "stranger.key")); code != ExitOK {
+		t.Fatalf("keygen exited %d: %s", code, errOut)
+	}
+
+	outDir := filepath.Join(work, "received")
+	code, _, errOut := run("recv", "-key", key, "-signer", filepath.Join(work, "stranger.pub"),
+		"-in", frameDir, "-out", outDir)
+	if code != ExitVerifyFailed {
+		t.Fatalf("exit = %d, want %d: %s", code, ExitVerifyFailed, errOut)
+	}
+	if _, err := os.Stat(outDir); !os.IsNotExist(err) {
+		t.Error("a receive with an unverifiable manifest wrote a dataset")
+	}
+	// Both readings are possible and they need different responses, so the
+	// message must not commit to one.
+	if !strings.Contains(errOut, "altered") {
+		t.Errorf("the error does not offer tampering as an explanation: %s", errOut)
+	}
+}
+
+func TestEveryManifestByteIsUnderTheSignature(t *testing.T) {
+	// Not a sample: the point of folding the salt, nonce, and coding
+	// parameters into the manifest is that none of them can be changed without
+	// breaking the signature, and a sample would not show that.
+	key, frameDir, _ := sendFixture(t, "2")
+	path := filepath.Join(frameDir, manifestName)
+
+	good, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	t.Cleanup(func() { _ = os.WriteFile(path, good, 0o644) })
+
+	work := t.TempDir()
+	for i := range good {
+		altered := bytes.Clone(good)
+		altered[i]++
+		if err := os.WriteFile(path, altered, 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		outDir := filepath.Join(work, fmt.Sprintf("out-%d", i))
+		code, _, _ := run("recv", "-key", key, "-signer", signerBeside(key), "-in", frameDir, "-out", outDir)
+		if code == ExitOK {
+			t.Fatalf("a manifest with byte %d altered was accepted", i)
+		}
+		if _, err := os.Stat(outDir); !os.IsNotExist(err) {
+			t.Fatalf("a manifest with byte %d altered still produced a dataset", i)
+		}
+	}
+}
+
+func TestVerifyReportsTheSignerItChecked(t *testing.T) {
+	// A verify report that does not say whose signature it checked is the
+	// unsigned record again: it says the dataset matches something, without
+	// saying who wrote the something.
+	frameDir, outDir, _ := received(t)
+
+	code, result := verified(t, frameDir, outDir)
+	if code != ExitOK {
+		t.Fatalf("verify exited %d: %+v", code, result.Problems)
+	}
+	if !regexp.MustCompile(`^([0-9a-f]{2}:){7}[0-9a-f]{2}$`).MatchString(result.Signer) {
+		t.Errorf("signer = %q, want a colon-separated fingerprint", result.Signer)
+	}
+}
+
+func TestVerifyRejectsADatasetSignedByAnotherIdentity(t *testing.T) {
+	// The case the unsigned record could not catch: the dataset is intact and
+	// matches its record exactly, and the record was written by the wrong
+	// person.
+	frameDir, outDir, _ := received(t)
+	work := t.TempDir()
+
+	if code, _, errOut := run("keygen", "-kind", "identity",
+		"-out", filepath.Join(work, "stranger.key")); code != ExitOK {
+		t.Fatalf("keygen exited %d: %s", code, errOut)
+	}
+
+	code, _, errOut := run("verify", "-in", frameDir,
+		"-signer", filepath.Join(work, "stranger.pub"), "-dir", outDir)
+	if code != ExitVerifyFailed {
+		t.Fatalf("exit = %d, want %d: %s", code, ExitVerifyFailed, errOut)
+	}
+}
+
+func TestMissingSignerNamesTheFix(t *testing.T) {
+	key, frameDir, _ := sendFixture(t, "2")
+	work := t.TempDir()
+
+	code, _, errOut := run("recv", "-key", key, "-signer", filepath.Join(work, "absent.pub"),
+		"-in", frameDir, "-out", filepath.Join(work, "received"))
+	if code != ExitInput {
+		t.Fatalf("exit = %d, want %d", code, ExitInput)
+	}
+	if !strings.Contains(errOut, "dhow keygen -kind identity") {
+		t.Errorf("the error does not say how to produce one: %s", errOut)
+	}
+}
+
+func TestDisplayRequiresAVerifiableManifest(t *testing.T) {
+	// display takes no action on the manifest's content, but a frames
+	// directory damaged since it was written should be caught before an
+	// operator spends twenty minutes in front of a screen.
+	key, frameDir, _ := sendFixture(t, "2")
+	work := t.TempDir()
+
+	if code, _, errOut := run("keygen", "-kind", "identity",
+		"-out", filepath.Join(work, "stranger.key")); code != ExitOK {
+		t.Fatalf("keygen exited %d: %s", code, errOut)
+	}
+
+	code, _, _ := run("display", "-in", frameDir, "-signer", filepath.Join(work, "stranger.pub"),
+		"-loops", "1", "-fps", "60", "-calibration", "0", "-no-clear", "-quiet")
+	if code != ExitVerifyFailed {
+		t.Errorf("display with an unverifiable manifest exited %d, want %d", code, ExitVerifyFailed)
+	}
+	_ = key
+}
+
+func TestManifestInventoryMatchesWhatWasPacked(t *testing.T) {
+	// The signed inventory is what verify checks a dataset against months
+	// later. If it does not describe what send actually packed, every later
+	// verification is measuring the wrong thing.
+	dir := t.TempDir()
+	key := keygen(t, dir)
+
+	src := t.TempDir()
+	for name, content := range map[string]string{
+		"a.txt":            "alpha",
+		"nested/b.txt":     "bravo",
+		"nested/deep/c.md": "charlie",
+	} {
+		full := filepath.Join(src, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	script := filepath.Join(src, "run.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	frameDir := filepath.Join(dir, "frames")
+	if code, _, errOut := run("send", "-key", key, "-identity", identityBeside(key),
+		"-in", src, "-out", frameDir); code != ExitOK {
+		t.Fatalf("send exited %d: %s", code, errOut)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(frameDir, manifestName))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	public, err := ffi.LoadPublicIdentity(signerBeside(key))
+	if err != nil {
+		t.Fatalf("LoadPublicIdentity: %v", err)
+	}
+	defer public.Close()
+
+	manifest, err := ffi.VerifyManifest(public, raw, nil)
+	if err != nil {
+		t.Fatalf("the manifest send just wrote does not verify: %v", err)
+	}
+	defer manifest.Close()
+
+	files, err := manifest.Files()
+	if err != nil {
+		t.Fatalf("Files: %v", err)
+	}
+
+	want := map[string]struct {
+		size       uint64
+		executable bool
+	}{
+		"a.txt":            {5, false},
+		"nested/b.txt":     {5, false},
+		"nested/deep/c.md": {7, false},
+		"run.sh":           {17, true},
+	}
+	if len(files) != len(want) {
+		t.Fatalf("the manifest names %d files, want %d", len(files), len(want))
+	}
+	for _, got := range files {
+		expected, ok := want[got.Name]
+		if !ok {
+			t.Errorf("the manifest names %q, which was not sent", got.Name)
+			continue
+		}
+		if got.Size != expected.size {
+			t.Errorf("%s: size = %d, want %d", got.Name, got.Size, expected.size)
+		}
+		if got.Executable != expected.executable {
+			t.Errorf("%s: executable = %v, want %v", got.Name, got.Executable, expected.executable)
+		}
+		if got.Digest == ([32]byte{}) {
+			t.Errorf("%s: the manifest carries a zero digest", got.Name)
+		}
+	}
+
+	// The parameters the receiver will decode with are in here too, and they
+	// are the ones send actually resolved rather than the ones it was asked
+	// for.
+	params, err := manifest.Params()
+	if err != nil {
+		t.Fatalf("Params: %v", err)
+	}
+	if params.BlockCount == 0 || params.SymbolSize == 0 || params.PayloadSize == 0 {
+		t.Errorf("the manifest carries unusable session parameters: %+v", params)
 	}
 }
