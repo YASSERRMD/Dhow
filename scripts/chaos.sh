@@ -120,6 +120,7 @@ cargo build --release --quiet --manifest-path "$ROOT/core/Cargo.toml" -p dhow-ff
 (cd "$ROOT" && go build -o "$DHOW" ./cli/cmd/dhow)
 
 "$DHOW" keygen -out "$WORK/operator.key" >/dev/null
+"$DHOW" keygen -kind identity -out "$WORK/sender.key" >/dev/null
 
 for round in $(seq 1 "$ROUNDS"); do
     R="$WORK/round-$round"
@@ -145,7 +146,8 @@ for round in $(seq 1 "$ROUNDS"); do
     pick 1 2 3 5 7 8 11 16; BLOCKS=$PICK_VALUE
     pick 0 10 30 50 80 150; OVERHEAD=$PICK_VALUE
 
-    if ! "$DHOW" send -key "$WORK/operator.key" -in "$R/data" -out "$R/frames" \
+    if ! "$DHOW" send -key "$WORK/operator.key" -identity "$WORK/sender.key" \
+        -in "$R/data" -out "$R/frames" \
         -symbol-size "$SYMBOL" -blocks "$BLOCKS" -overhead "$OVERHEAD" \
         >/dev/null 2>"$R/send.err"
     then
@@ -230,7 +232,7 @@ for round in $(seq 1 "$ROUNDS"); do
     if [ "$KILL" -eq 0 ]; then
         rand 80; STOP=$((RAND_VALUE + 1))
         set +e
-        "$DHOW" recv -key "$WORK/operator.key" -in "$R/captured" -out "$R/received" \
+        "$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$R/captured" -out "$R/received" \
             -state "$STATE_DIR" -stop-after "$STOP" >/dev/null 2>"$R/first.err"
         FIRST_EXIT=$?
         set -e
@@ -256,11 +258,11 @@ for round in $(seq 1 "$ROUNDS"); do
 
     set +e
     if [ "$RESUMED" = yes ]; then
-        "$DHOW" recv -key "$WORK/operator.key" -in "$R/captured" -out "$R/received" \
+        "$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$R/captured" -out "$R/received" \
             -state "$STATE_DIR" >/dev/null 2>"$R/recv.err"
         EXIT_CODE=$?
     elif [ "$KILL" -eq 0 ]; then
-        "$DHOW" recv -key "$WORK/operator.key" -in "$R/captured" -out "$R/received" \
+        "$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$R/captured" -out "$R/received" \
             >/dev/null 2>"$R/recv.err"
         EXIT_CODE=$?
     else
@@ -269,7 +271,7 @@ for round in $(seq 1 "$ROUNDS"); do
         if [ -d "$R/received" ]; then
             EXIT_CODE=0
         else
-            "$DHOW" recv -key "$WORK/operator.key" -in "$R/captured" -out "$R/received" \
+            "$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$R/captured" -out "$R/received" \
                 >/dev/null 2>"$R/recv.err"
             EXIT_CODE=$?
         fi
@@ -290,7 +292,7 @@ for round in $(seq 1 "$ROUNDS"); do
             # The verify output is captured, not discarded. A harness that
             # reports "verify rejected the dataset" without saying which file
             # and why has found a defect and thrown away the evidence.
-            if ! "$DHOW" verify -in "$R/frames" -dir "$R/received" -json > "$R/verify.json" 2>&1; then
+            if ! "$DHOW" verify -in "$R/frames" -signer "$WORK/sender.pub" -dir "$R/received" -json > "$R/verify.json" 2>&1; then
                 fail "round ${round}: recv succeeded but verify rejected the dataset (${DESC})
 $(cat "$R/verify.json")"
             fi

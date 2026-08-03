@@ -44,9 +44,10 @@ cargo build --release --quiet --manifest-path "$ROOT/core/Cargo.toml" -p dhow-ff
 
 for snippet in \
     "dhow keygen -out operator.key" \
-    "dhow send -key operator.key" \
-    "dhow recv -key operator.key" \
-    "dhow verify -in ./frames -dir ./received" \
+    "dhow keygen -kind identity -out sender.key" \
+    "dhow send -key operator.key -identity ./sender.key" \
+    "dhow recv -key operator.key -signer ./sender.pub" \
+    "dhow verify -in ./frames -signer ./sender.pub -dir ./received" \
     "-symbol-size 1320 -blocks 11 -overhead 60" \
     "-state ./.dhow-state"
 do
@@ -68,6 +69,7 @@ chmod +x dataset/bin/run.sh
 # --- Key ceremony, per the guide ---
 
 "$DHOW" keygen -out operator.key >/dev/null
+"$DHOW" keygen -kind identity -out sender.key >/dev/null
 
 # The guide says the file is mode 0600 and that dhow refuses one readable by
 # anyone else. Both claims are checked rather than believed.
@@ -76,7 +78,7 @@ MODE=$(stat -f '%Lp' operator.key 2>/dev/null || stat -c '%a' operator.key)
 
 chmod 644 operator.key
 set +e
-"$DHOW" recv -key operator.key -in ./frames -out ./x >/dev/null 2>&1
+"$DHOW" recv -key operator.key -signer ./sender.pub -in ./frames -out ./x >/dev/null 2>&1
 PERM_EXIT=$?
 set -e
 [ "$PERM_EXIT" -ne 0 ] || fail "the guide claims a permissive key is refused, but it was accepted"
@@ -88,11 +90,31 @@ set +e
 CLOBBER_EXIT=$?
 set -e
 [ "$CLOBBER_EXIT" -eq 2 ] || fail "the guide claims an existing key is not overwritten; exit was ${CLOBBER_EXIT}"
+
+# The guide's key-ceremony table claims the identity writes two files, that the
+# secret half is 0600, and that keygen prints a fingerprint the two operators
+# compare. All three are what an operator is told to rely on.
+[ -f sender.key ] || fail "the guide says keygen -kind identity writes sender.key"
+[ -f sender.pub ] || fail "the guide says keygen -kind identity writes sender.pub"
+ID_MODE=$(stat -f '%Lp' sender.key 2>/dev/null || stat -c '%a' sender.key)
+[ "$ID_MODE" = "600" ] || fail "the guide claims the identity is mode 0600, got ${ID_MODE}"
+
+"$DHOW" keygen -kind identity -out ceremony.key > ceremony.log 2>&1
+grep -qE 'fingerprint ([0-9a-f]{2}:){7}[0-9a-f]{2}' ceremony.log \
+    || fail "the guide tells operators to compare a fingerprint keygen no longer prints"
+
+# The guide says the two kinds are recorded in the file and not interchangeable.
+set +e
+"$DHOW" send -key operator.key -identity ./operator.key -in ./dataset -out ./nope >/dev/null 2>&1
+WRONG_KIND=$?
+set -e
+[ "$WRONG_KIND" -ne 0 ] \
+    || fail "the guide says an operator key cannot be used as an identity, but send accepted one"
 pass "key ceremony behaves as the guide describes"
 
 # --- Send, with the guide's parameters ---
 
-"$DHOW" send -key operator.key -in ./dataset -out ./frames \
+"$DHOW" send -key operator.key -identity ./sender.key -in ./dataset -out ./frames \
     -symbol-size 1320 -blocks 11 -overhead 60 >/dev/null
 
 FRAMES=$(find ./frames -name 'frame-*.bin' | wc -l | tr -d ' ')
@@ -108,7 +130,7 @@ pass "sent ${FRAMES} frames and they fit the guide's QR version"
 
 # --- Receive, with the state directory the guide insists on ---
 
-"$DHOW" recv -key operator.key -in ./frames -out ./received \
+"$DHOW" recv -key operator.key -signer ./sender.pub -in ./frames -out ./received \
     -state ./.dhow-state -verbose 2> recv.log >/dev/null
 
 # The guide tells an operator to watch per-block progress under -verbose, and
@@ -120,7 +142,7 @@ pass "receive reported the progress the guide tells operators to watch"
 
 # --- Verify, per the guide ---
 
-"$DHOW" verify -in ./frames -dir ./received >/dev/null \
+"$DHOW" verify -in ./frames -signer ./sender.pub -dir ./received >/dev/null \
     || fail "verify rejected a dataset that transferred cleanly"
 diff -r ./dataset ./received >/dev/null || fail "the dataset did not round trip"
 [ -x ./received/bin/run.sh ] || fail "the executable bit was lost"
@@ -129,21 +151,28 @@ pass "dataset round tripped and verified"
 # --- The exit codes the guide's table promises ---
 
 set +e
-"$DHOW" recv -key operator.key -in ./frames -out ./partial \
+"$DHOW" recv -key operator.key -signer ./sender.pub -in ./frames -out ./partial \
     -state ./.partial-state -stop-after 5 >/dev/null 2>&1
 INCOMPLETE=$?
-"$DHOW" verify -in ./frames -dir ./nonexistent >/dev/null 2>&1
+"$DHOW" verify -in ./frames -signer ./sender.pub -dir ./nonexistent >/dev/null 2>&1
 VERIFY_FAIL=$?
-"$DHOW" recv -key operator.key -in ./nonexistent -out ./y >/dev/null 2>&1
+"$DHOW" recv -key operator.key -signer ./sender.pub -in ./nonexistent -out ./y >/dev/null 2>&1
 BAD_INPUT=$?
 "$DHOW" send -nonsense >/dev/null 2>&1
 BAD_USAGE=$?
+# The guide's table promises exit 3, before a frame is read, when the manifest
+# was not signed by the identity in -signer.
+"$DHOW" keygen -kind identity -out stranger.key >/dev/null 2>&1
+"$DHOW" recv -key operator.key -signer ./stranger.pub -in ./frames -out ./z >/dev/null 2>&1
+WRONG_SIGNER=$?
 set -e
 
 [ "$INCOMPLETE" -eq 4 ] || fail "the guide promises 4 for incomplete, got ${INCOMPLETE}"
 [ "$VERIFY_FAIL" -eq 3 ] || fail "the guide promises 3 for verification failure, got ${VERIFY_FAIL}"
 [ "$BAD_INPUT" -eq 2 ] || fail "the guide promises 2 for bad input, got ${BAD_INPUT}"
 [ "$BAD_USAGE" -eq 1 ] || fail "the guide promises 1 for usage errors, got ${BAD_USAGE}"
+[ "$WRONG_SIGNER" -eq 3 ] || fail "the guide promises 3 for a wrong signer, got ${WRONG_SIGNER}"
+[ ! -d ./z ] || fail "a receive with an unverifiable manifest wrote output"
 pass "every exit code in the guide's table is the code produced"
 
 # --- The block-count advice, demonstrated ---
@@ -154,7 +183,7 @@ pass "every exit code in the guide's table is the code produced"
 # choose a prime on that basis, so the claim is demonstrated rather than
 # asserted.
 
-"$DHOW" send -key operator.key -in ./dataset -out ./f8 \
+"$DHOW" send -key operator.key -identity ./sender.key -in ./dataset -out ./f8 \
     -symbol-size 1320 -blocks 8 -overhead 60 >/dev/null
 cp -R ./f8 ./f8-lossy
 i=0
@@ -164,14 +193,14 @@ for f in ./f8-lossy/frame-*.bin; do
 done
 
 set +e
-"$DHOW" recv -key operator.key -in ./f8-lossy -out ./r8 >/dev/null 2>&1
+"$DHOW" recv -key operator.key -signer ./sender.pub -in ./f8-lossy -out ./r8 >/dev/null 2>&1
 PERIODIC_EXIT=$?
 set -e
 [ "$PERIODIC_EXIT" -eq 4 ] \
     || fail "loss on the block period was expected to defeat the transfer; exit was ${PERIODIC_EXIT}"
 
 # The same loss rate, against a prime block count the period does not divide.
-"$DHOW" send -key operator.key -in ./dataset -out ./f11 \
+"$DHOW" send -key operator.key -identity ./sender.key -in ./dataset -out ./f11 \
     -symbol-size 1320 -blocks 11 -overhead 60 >/dev/null
 cp -R ./f11 ./f11-lossy
 i=0
@@ -180,7 +209,7 @@ for f in ./f11-lossy/frame-*.bin; do
     i=$((i + 1))
 done
 
-"$DHOW" recv -key operator.key -in ./f11-lossy -out ./r11 >/dev/null 2>&1 \
+"$DHOW" recv -key operator.key -signer ./sender.pub -in ./f11-lossy -out ./r11 >/dev/null 2>&1 \
     || fail "the guide's recommended prime block count did not survive the same loss"
 diff -r ./dataset ./r11 >/dev/null || fail "the recovered dataset differs"
 pass "the guide's block-count advice holds: 8 blocks fails where 11 survives"
