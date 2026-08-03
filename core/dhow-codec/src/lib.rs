@@ -166,6 +166,25 @@ pub enum ResumeError {
     /// The symbol count in the resume file is invalid.
     #[error("invalid symbol count: {count}")]
     InvalidSymbolCount { count: u32 },
+
+    /// A reserved field was not zero.
+    ///
+    /// Reserved bytes are where a future version puts a field. A writer that
+    /// fills them is either a version this one cannot read or a forgery.
+    #[error("reserved field at offset {offset} is not zero")]
+    ReservedNotZero { offset: usize },
+
+    /// The declared symbols-held count disagrees with the bitmap.
+    #[error("resume block declares {declared} symbols held but its bitmap has {bitmap}")]
+    HeldCountMismatch { declared: u32, bitmap: u32 },
+
+    /// The resume file has bytes past its last block entry.
+    #[error("resume file has {extra} trailing bytes after the last block entry")]
+    TrailingBytes { extra: usize },
+
+    /// The replayed journal does not match what the resume file describes.
+    #[error("resume state does not describe this journal: {details}")]
+    JournalMismatch { details: String },
 }
 
 /// Errors that can occur during manifest operations.
