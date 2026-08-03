@@ -13,6 +13,138 @@ discrepancy precisely rather than as a single failure.
 diagnosis for each corruption class: a missing file, an extra file, a
 truncated file, a single flipped byte, and a lost executable bit.
 
+### What the command was, and why it was not verification
+
+`verify` counted the regular files under a directory and compared the number
+with the count in the transfer record. A dataset with the right number of
+files and every one of them corrupted passed. It could not distinguish a
+transfer from a directory of the same shape filled with zeroes.
+
+`recv` was never the problem: it checks the payload digest and the AEAD tag
+before it extracts a byte, so a dataset that exists on disk was correct when
+written. The question `verify` exists to answer is a different one - is it
+still correct *now*, months later, after a disk, a backup, and a sync tool
+have all had a turn. Answering it needs something to compare against, and the
+record carried nothing but a count.
+
+The record now carries an inventory: name, size, executable bit, and BLAKE3
+content digest per file, taken from the same read that fed the archive. verify
+walks the dataset and checks all four, plus files present that were never
+sent.
+
+Three decisions worth recording. Size is checked before contents, so a
+truncated file is reported as truncated rather than as a digest mismatch,
+which says only that *something* is wrong. A wrong executable bit does not
+suppress the content check, or the more serious of two problems would be
+hidden by the lesser. And every discrepancy is reported in one run: an
+operator staring at a dataset that came back wrong needs the whole picture,
+not the alphabetically first part of it.
+
+Problems carry a stable `kind` beside the prose, so a script branches on
+`content` rather than on a sentence that may be reworded.
+
+### Avoided: a memory regression, and a second BLAKE3
+
+Two things went differently than the obvious implementation.
+
+Go has no BLAKE3. Adding one would mean the digest that decides whether a
+dataset verified had two implementations - the transfer's and verify's - which
+would disagree silently rather than loudly. The core exposes its own instead,
+so there is one.
+
+The first version of the packing change hashed each file by buffering it and
+digesting the buffer. That turns a working set bounded by the payload into one
+that also grows with the largest single file, which is a real regression on
+exactly the datasets this tool exists for. Replaced with a streaming hasher
+across the FFI: `pack` hashes through an `io.MultiWriter` on the stream that
+already feeds the archive, so no part of a file is held on the digest's
+account, and `verify` streams each file rather than reading it whole.
+
+The streamed and one-shot digests are asserted equal at eight different write
+sizes, on and off BLAKE3's 1024-byte chunk boundary, because a hasher that
+mishandles a partial chunk agrees with the one-shot only when the splits
+happen to align.
+
+### Defect found: an ABI-version test pinned to a literal
+
+`test_abi_version_is_two` asserted the literal `2`, and failed the moment the
+version moved to 3. A test whose only failure mode is being out of date gets
+updated reflexively rather than read, so it now checks that the exported
+function agrees with the constant. The Go bindings still assert the number
+itself, which is where a disagreement between the two sides actually matters.
+
+`ineffassign` also caught a variable assigned and immediately replaced in a
+new test - a finding that only surfaces because Phase 24 made the linter
+config apply.
+
+### Deviation
+
+The pack's Phase 30 calls for verification "against its manifest". The signed
+Ed25519 manifest exists in `dhow-crypt` but is not yet wired to the CLI, so
+verify checks against the transfer record, which is the documented stand-in
+until the manifest travels in the frame stream.
+
+The difference is stated plainly in `docs/VERIFY.md` rather than glossed: the
+record is unsigned and sits beside the dataset, so verify answers "does this
+dataset still match the record?" and not "was this produced by someone holding
+the operator key?". Wiring the signed manifest through send, recv, and verify
+is its own phase.
+
+### Verified by hand
+
+```
+$ dhow verify -in frames -dir got
+session   5a4f2099a4bb8fc90a88ee09c48ad4b3
+files     3
+bytes     5024
+result    OK
+
+$ dhow verify -in frames -dir got     # one byte flipped, one file removed,
+session   5a4f2099a4bb8fc90a88ee09c48ad4b3   # one planted, one chmod -x
+files     2 checked of 3
+result    FAILED
+  - a.txt: missing from the dataset
+  - run.sh: is not executable but was sent executable
+  - sub/blob.bin: contents differ: digest ac633003, expected e1ddb64b
+  - extra.txt: is not part of the transfer
+                                                                     exit 3
+```
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+=== GATE: cargo fmt --check ===        PASS
+=== GATE: cargo clippy -D warnings === PASS
+=== GATE: cargo test ===               PASS
+=== GATE: cargo audit ===              PASS
+=== GATE: cargo deny ===               PASS
+=== GATE: ABI drift ===                PASS
+=== GATE: build rust core for cgo ===  PASS
+=== GATE: go vet ===                   PASS
+=== GATE: go test -race ===            PASS
+=== GATE: go build ===                 PASS
+=== GATE: golangci-lint ===            PASS
+=== GATE: govulncheck ===              PASS
+=== GATE: loopback end-to-end ===      PASS
+
+=== GATE SUMMARY ===
+  Passed: 13
+  Failed: 0
+ALL GATES PASSED
+```
+
+```
+$ scripts/loopback.sh 2 20
+  PASS  verify accepts a good dataset
+  PASS  verify catches a single flipped byte in a good-looking dataset
+  PASS  verify rejects a damaged dataset
+=== LOOPBACK PASSED in 6s ===
+```
+
+430 Rust tests and every Go package pass. The ABI moves to version 3 for the
+one-shot digest and the streaming hasher.
+
 ## Phase 24 - Interruption and resume, full stack
 
 **Objective:** A receiver that survives being killed. Progress is persisted to
