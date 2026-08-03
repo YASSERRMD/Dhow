@@ -17,6 +17,258 @@ regression tests. The phase pack asks for 24 cumulative CPU-hours of fuzzing,
 which is not something this session can produce - the log records the time
 actually run and says so rather than claiming the number.
 
+### The toolchain decision
+
+Three options, one chosen, all three written down in `docs/FUZZING.md` because
+the reasons are the part that will not be reconstructable later.
+
+**Chosen: a second nightly, pinned to a date, scoped to `fuzz/`.**
+`fuzz/rust-toolchain.toml` pins `nightly-2025-12-14`. `rustup` resolves the
+nearest toolchain file walking up from the working directory, so `core/` still
+gets stable 1.97.0 and nothing else in the repository sees the nightly. The
+fuzz crate sits outside the `core/` workspace, so a stable
+`cargo test --all-targets` never tries to compile a libfuzzer target.
+
+**Rejected: `honggfuzz-rs`**, which runs on stable. It needs the honggfuzz
+binary built from C sources at install time, which trades a Rust version pin
+for a C build dependency - a worse trade for a project whose entire non-Go
+surface is Rust, and one that moves the fragility from a number to a build that
+either works on the machine or does not.
+
+**Rejected: a hand-rolled corpus replayer on stable.** No extra toolchain, and
+not fuzzing: without coverage instrumentation a mutation harness explores the
+input space by luck. It would have satisfied the letter of B-4 and none of its
+purpose.
+
+The pinned nightly is 1.94.0-nightly, which is *older* than the pinned stable.
+That is fine today and will not stay fine, and the cost is written down rather
+than discovered later.
+
+### AddressSanitizer does not work on this host
+
+`cargo-fuzz` enables ASan by default. On this machine - macOS 26, Darwin 25.5 -
+the ASan runtime shipped with the pinned nightly hangs before executing a single
+input. A ten-second run had not terminated after eleven minutes; the process was
+sampled at 98% CPU and the stack shows where it is stuck:
+
+```
+__asan::AsanInitInternal()
+  __asan::InitializeShadowMemory()
+    __sanitizer::MemoryRangeIsAvailable()
+      __sanitizer::MemoryMappingLayout::Next()
+        __sanitizer::get_dyld_hdr()
+          dyld_shared_cache_iterate_text_swift
+```
+
+It never leaves dyld initialisation. That is an incompatibility between that
+sanitizer runtime and this operating system, not a defect in this code.
+
+`scripts/fuzz.sh` selects `-s none` on Darwin and `-s address` everywhere else,
+so CI keeps the sanitizer. What that costs is small and is stated rather than
+glossed: every target exercises `dhow-codec` and `dhow-crypt`, both of which
+carry `#![forbid(unsafe_code)]`, so the memory errors ASan exists to catch
+cannot be written in them - an out-of-bounds index is a panic and libFuzzer
+catches a panic. ASan would earn its keep against `dhow-ffi`, and no target
+reaches it. That gap is B-7, not a consequence of this workaround.
+
+Without the sanitizer the targets run at roughly a million executions per second
+per target, which is where the coverage comes from.
+
+### What was run
+
+Five targets, ten minutes each, against the shipped code:
+
+| Target | Executions | New units | Result |
+|--------|-----------:|----------:|--------|
+| `frame_decode` | 376,436,525 | 73 | pass |
+| `session_header` | 654,700,778 | 39 | pass |
+| `manifest_entry` | 578,746,262 | 475 | pass |
+| `manifest_verify` | 108,245,945 | 257 | pass |
+| `resume_load` | 648,246,959 | 157 | pass |
+
+**2,366,376,469 executions in 3,005 seconds of fuzzer time, zero crashes and
+zero timeouts.**
+
+**That is 0.83 CPU-hours, not the 24 the phase pack asks for.** The gate is not
+met and is not claimed to be met. What the pack wants is a soak measured in
+days on a machine that has days; what this session can produce is fifty minutes.
+The targets, the corpus, the runner, and the CI job are what make those hours
+cheap to accumulate later, and `scripts/fuzz.sh 3600` is the command. The number
+above is what was actually run.
+
+### The targets bite
+
+A fuzz target that cannot fail is a fuzz target nobody has checked. Both the
+fuzzer and the stable replay were shown to catch a real defect: `validate_name`
+was removed from `FileEntry::from_bytes` on a scratch working tree, and
+
+```
+thread '<unnamed>' panicked at fuzz_targets/manifest_entry.rs:57:5
+  FAIL  manifest_entry: see fuzz/artifacts/manifest_entry/
+```
+
+fired in under thirty seconds on an input whose name contained a backslash. The
+same input, placed in `fuzz/seeds/`, failed `replay_test` on stable. The parser
+was restored and the artifact deleted.
+
+### `frame_decode` had to repair the MAC to be worth anything
+
+The first version of the target only ever tested the rejection path. A fuzzer
+will not produce eight bytes of keyed MAC by mutation, so every input died at
+the first check and the code that reads a declared length and slices a payload
+out of a buffer - the code worth fuzzing - was never reached.
+
+The target now parses twice: once unaltered, which is what an attacker without
+the key gets, and once with the MAC and CRC recomputed so the frame
+authenticates. Repairing a checksum to pass a gate is standard, and it is sound
+here because the repaired fields are exactly the ones a sender computes;
+everything the fuzzer still controls is what a *legitimate but malicious* sender
+controls, which is the threat on that side of the MAC.
+
+Coverage went from 79 edges to 95.
+
+### The defect it found
+
+**`Manifest::from_bytes` accepted trailing bytes** and silently ignored them, so
+`to_vec()` could describe less than the input it was parsed from. Found while
+writing the target's round-trip assertion, not by the fuzzer itself - the
+assertion had to be weakened to a prefix comparison to pass, and weakening an
+assertion to make it pass is the moment to stop and look.
+
+`ResumeFile::from_bytes` has rejected exactly this shape since Phase 12, with
+exactly this reasoning. Two parsers in one crate with one threat posture
+disagreed.
+
+Not exploitable today: `signing_bytes_of` covers the whole buffer, so a
+legitimate manifest cannot carry a tail and an appended one does not verify. But
+`dhow_manifest_verify` stores the full input as the handle's bytes, and a parser
+whose output does not describe its input is a trap for the next caller who
+parses without verifying. Fixed, with two tests, and the fuzz target and replay
+test now assert exact length rather than a prefix.
+
+### Where the corpus comes from
+
+`scripts/seed_corpus.py` derives every seed from `proto/vectors.json`, so a
+wire-format change that regenerates the vectors regenerates the corpus with it.
+A corpus written by hand drifts from the format and stops reaching the code it
+was built to reach, silently.
+
+Truncated prefixes are seeded explicitly. Shortening a buffer without adjusting
+the length field inside it is exactly what a bounds check is for, and random
+byte flips almost never produce it.
+
+The minimized corpus - 177 inputs, 28 KB - is committed under `fuzz/seeds/`.
+It was called `fuzz/regressions/` for two commits, which was a lie: it held 54
+inputs that had never regressed anything. It is replayed two ways: into the
+working corpus before every fuzz run, and by `dhow-codec`'s `replay_test` on
+**stable**, in the default `cargo test`. The second is the one that matters,
+because the fuzz gate skips on a machine without nightly and a regression check
+that only runs where the fuzzer runs is one that was not needed.
+
+### Gate output
+
+The gate goes from 18 checks to 19. The fuzz check skips rather than fails when
+the toolchain is absent, and a skip is counted and named separately - a gate
+that reports PASS when its tooling is missing is a green summary that means
+nothing, and this repository shipped one of those in the conformance suite until
+last phase.
+
+```
+$ ./scripts/gate.sh
+=== GATE: cargo fmt --check ===
+  PASS
+=== GATE: cargo clippy -D warnings ===
+  PASS
+=== GATE: cargo test ===
+  PASS
+=== GATE: cargo audit ===
+  PASS
+=== GATE: cargo deny ===
+  PASS
+=== GATE: ABI drift ===
+  PASS
+=== GATE: wire-format spec consistency ===
+  PASS
+=== GATE: golden vector conformance ===
+  PASS
+=== GATE: build rust core for cgo ===
+  PASS
+=== GATE: gofmt --check ===
+  PASS
+=== GATE: go vet ===
+  PASS
+=== GATE: go test -race ===
+  PASS
+=== GATE: go build ===
+  PASS
+=== GATE: golangci-lint ===
+  PASS
+=== GATE: govulncheck ===
+  PASS
+=== GATE: loopback end-to-end ===
+  PASS
+=== GATE: operations guide drill ===
+  PASS
+=== GATE: chaos soak (12 rounds) ===
+  PASS
+=== GATE: fuzz targets (10s each) ===
+  PASS
+
+=== GATE SUMMARY ===
+  Passed:  19
+  Failed:  0
+  Skipped: 0
+ALL GATES PASSED
+```
+
+The full fuzz run:
+
+```
+$ scripts/fuzz.sh 600
+=== dhow fuzz ===
+toolchain nightly-2025-12-14, sanitizer none, 600s per target
+
+=== frame_decode ===
+Done 376436525 runs in 601 second(s)
+  PASS  frame_decode
+=== session_header ===
+Done 654700778 runs in 601 second(s)
+  PASS  session_header
+=== manifest_entry ===
+Done 578746262 runs in 601 second(s)
+  PASS  manifest_entry
+=== manifest_verify ===
+Done 108245945 runs in 601 second(s)
+  PASS  manifest_verify
+=== resume_load ===
+Done 648246959 runs in 601 second(s)
+  PASS  resume_load
+
+=== FUZZ PASSED ===
+```
+
+### Deviation: 15 atomic commits, not 20
+
+Honest decomposition of this phase yielded fifteen. The floor is twenty and this
+does not meet it. The work is a toolchain decision, a crate scaffold, five
+targets, a corpus generator, a runner, two gate wirings, a stable replay, one
+defect fix, and the documentation for each - and there is no further split that
+produces a commit doing one thing rather than half of one. Padding to twenty
+would mean splitting the five targets into five commits that individually do not
+build against a runner that does not exist yet.
+
+Recorded rather than manufactured, as `temp/git_instruction.md` requires.
+
+### What is still open
+
+**B-7: no fuzz target reaches `dhow-ffi`.** That crate is where every caller
+pointer is dereferenced and every caller buffer is written, and its unit tests
+cover the cases somebody thought of. It needs a target that drives the handle
+lifecycle with a fuzzer choosing the sequence, not one that feeds bytes to a
+parser, which is closer to Phase 34's structured fuzzing than to this phase.
+
+**The 24 CPU-hour gate.** Unmet, at 0.83.
+
 ## Phase 28 - Wire the signed manifest through the CLI
 
 **Objective:** `dhow-crypt` has implemented manifest signing, verification,
