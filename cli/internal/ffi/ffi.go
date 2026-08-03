@@ -673,6 +673,35 @@ func (d *Decoder) Close() {
 	d.ptr = nil
 }
 
+// Blake3 returns the BLAKE3 digest of data.
+//
+// Computed by the Rust core rather than in Go, so the digest that decides
+// whether a dataset verified has exactly one implementation: the same one the
+// transfer itself used.
+func Blake3(data []byte) ([32]byte, error) {
+	var out [32]byte
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	// The core treats a null pointer as a missing argument rather than an
+	// empty slice, so an empty input still needs somewhere to point.
+	ptr := (*C.uint8_t)(nil)
+	if len(data) > 0 {
+		ptr = (*C.uint8_t)(unsafe.Pointer(&data[0]))
+	} else {
+		var empty [1]byte
+		ptr = (*C.uint8_t)(unsafe.Pointer(&empty[0]))
+	}
+
+	st := Status(C.dhow_blake3(ptr, C.size_t(len(data)), (*C.uint8_t)(unsafe.Pointer(&out[0]))))
+	runtime.KeepAlive(data)
+	if st != StatusOK {
+		return [32]byte{}, wrap(st)
+	}
+	return out, nil
+}
+
 // QRCode is one frame rendered as a QR module grid.
 //
 // Modules is one byte per module, row-major, 1 for dark, so the grid is
