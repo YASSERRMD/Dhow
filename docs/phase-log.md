@@ -1,5 +1,19 @@
 # Phase Log
 
+## Phase 27 - Chaos and soak
+
+**Objective:** Every test so far picks the fault it injects. A harness that
+picks them at random, from a seed it prints, runs many transfers unattended
+with randomised coding parameters, loss rates, corruption, and mid-transfer
+kills, and asserts the only two acceptable outcomes: the transfer completes
+and the dataset verifies byte for byte, or it fails closed and writes nothing
+wrong. Silent corruption is the one result that is never acceptable.
+
+**Gates:** a soak of many consecutive randomised rounds with zero silent
+corruption; the seed reproduces a failing round exactly; the harness runs
+bounded in the gate and unbounded on demand.
+
+
 ## Phase 26 - Operator UX and the operations guide
 
 **Objective:** Make the tool usable by someone who did not build it. A
