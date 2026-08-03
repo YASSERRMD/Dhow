@@ -31,7 +31,7 @@
  * compatible. A caller that links against a mismatched version should refuse
  * to run rather than guess.
  */
-#define DHOW_ABI_VERSION 1
+#define DHOW_ABI_VERSION 2
 
 /**
  * Status returned by every `dhow_*` entry point.
@@ -87,6 +87,16 @@ typedef enum {
      * A panic was caught at the ABI boundary. Always a bug in this library.
      */
     DHOW_STATUS_PANIC = -11,
+    /**
+     * A resume state was malformed, or did not describe the journal replayed
+     * against it.
+     *
+     * Distinct from [`DhowStatus::VerificationFailed`] because the two mean
+     * opposite things to an operator: a failed verification says the transfer
+     * is bad, while a rejected resume says only that the saved progress is
+     * unusable and the transfer can be restarted.
+     */
+    DHOW_STATUS_RESUME_REJECTED = -12,
 } DhowStatus;
 
 /**
@@ -357,6 +367,70 @@ DhowStatus dhow_decoder_finish(const DhowDecoder *decoder,
                                uint8_t *buf,
                                uintptr_t len,
                                uintptr_t *written);
+
+/**
+ * Serializes the decoder's progress as a resume file.
+ *
+ * `journal_bytes` is the length of the caller's journal at this moment. The
+ * caller owns the journal, so only it knows how long the file is; the decoder
+ * knows only which frames were in it.
+ *
+ * Call with a null `buf` to learn the required size.
+ *
+ * # Safety
+ *
+ * `decoder` must be a live handle; `buf` must be null or point to `len`
+ * writable bytes; `written` must be null or writable.
+ */
+DhowStatus dhow_decoder_resume_state(const DhowDecoder *decoder,
+                                     uint64_t journal_bytes,
+                                     uint8_t *buf,
+                                     uintptr_t len,
+                                     uintptr_t *written);
+
+/**
+ * Reads a resume file's header without needing a decoder.
+ *
+ * A restarting receiver needs the session ID and journal length *before* it
+ * can build a decoder and replay: the length says how much of the journal is
+ * covered, and the session ID says whether this state belongs to the transfer
+ * in hand at all.
+ *
+ * Returns [`DhowStatus::ResumeRejected`] if the file is malformed or fails its
+ * integrity checks. Any output pointer may be null if the caller does not
+ * want that field.
+ *
+ * # Safety
+ *
+ * `state` must point to `state_len` readable bytes. `session_id_out` must be
+ * null or point to 16 writable bytes; the other outputs must be null or
+ * writable.
+ */
+DhowStatus dhow_resume_state_read(const uint8_t *state,
+                                  uintptr_t state_len,
+                                  uint8_t *session_id_out,
+                                  uint64_t *journal_bytes_out,
+                                  uint32_t *block_count_out);
+
+/**
+ * Checks a resume file against what this decoder holds after a replay.
+ *
+ * Returns [`DhowStatus::ResumeRejected`] when the state is malformed, belongs
+ * to another session, or describes a journal other than the one replayed.
+ *
+ * This is not what keeps forged symbols out: every replayed frame is
+ * authenticated against the session key on the way in, and a resume file
+ * carries no key. What it catches is a stale, truncated, reordered, or
+ * swapped pair of files being mistaken for progress that was really made.
+ *
+ * # Safety
+ *
+ * `decoder` must be a live handle and `state` must point to `state_len`
+ * readable bytes.
+ */
+DhowStatus dhow_decoder_resume_verify(const DhowDecoder *decoder,
+                                      const uint8_t *state,
+                                      uintptr_t state_len);
 
 /**
  * Releases a decoder handle. Passing null is a no-op.

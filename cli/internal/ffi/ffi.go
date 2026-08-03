@@ -59,6 +59,7 @@ const (
 	StatusKeyFailed         Status = -9
 	StatusInternal          Status = -10
 	StatusPanic             Status = -11
+	StatusResumeRejected    Status = -12
 )
 
 // ErrIncomplete reports that a transfer needs more frames before it can finish.
@@ -73,6 +74,13 @@ var ErrIncomplete = errors.New("dhow: transfer incomplete")
 // A receiver watching a screen should keep going rather than abort. Most
 // rejections are ordinary capture noise: a blurred or half-drawn frame.
 var ErrFrameRejected = errors.New("dhow: frame rejected")
+
+// ErrResumeRejected reports that saved progress could not be used.
+//
+// Distinct from a verification failure, which says the transfer itself is bad.
+// This says only that the state on disk is unusable, so the caller's choice is
+// between restarting the transfer and investigating why.
+var ErrResumeRejected = errors.New("dhow: resume state rejected")
 
 // Error is a failure reported by the Rust core.
 type Error struct {
@@ -96,6 +104,8 @@ func (e *Error) Is(target error) bool {
 		return e.Status == StatusIncomplete
 	case ErrFrameRejected:
 		return e.Status == StatusFrameRejected
+	case ErrResumeRejected:
+		return e.Status == StatusResumeRejected
 	}
 	return false
 }
@@ -537,6 +547,118 @@ func (d *Decoder) Finish(
 		return nil, wrap(st)
 	}
 	return buf[:int(written)], nil
+}
+
+// ResumeState serializes the decoder's progress so a restart can replay it.
+//
+// journalBytes is the length of the caller's journal at this moment. The
+// caller owns the journal, so only it knows how long the file is; the decoder
+// knows only which frames were in it. The two must be captured together, or
+// the state will describe a journal that no longer exists.
+func (d *Decoder) ResumeState(journalBytes uint64) ([]byte, error) {
+	if d == nil || d.ptr == nil {
+		return nil, errors.New("dhow: decoder is closed")
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	var needed C.size_t
+	if st := Status(C.dhow_decoder_resume_state(
+		d.ptr, C.uint64_t(journalBytes), nil, 0, &needed,
+	)); st != StatusOK {
+		return nil, wrap(st)
+	}
+	if needed == 0 {
+		return nil, nil
+	}
+
+	buf := make([]byte, int(needed))
+	var written C.size_t
+	st := Status(C.dhow_decoder_resume_state(
+		d.ptr,
+		C.uint64_t(journalBytes),
+		(*C.uint8_t)(unsafe.Pointer(&buf[0])),
+		C.size_t(len(buf)),
+		&written,
+	))
+	runtime.KeepAlive(buf)
+	if st != StatusOK {
+		return nil, wrap(st)
+	}
+	return buf[:int(written)], nil
+}
+
+// VerifyResume checks saved progress against what this decoder holds.
+//
+// Call it after replaying a journal. An error matching ErrResumeRejected means
+// the state and the journal describe different things, which is a reason to
+// stop rather than to guess which one is right.
+func (d *Decoder) VerifyResume(state []byte) error {
+	if d == nil || d.ptr == nil {
+		return errors.New("dhow: decoder is closed")
+	}
+	if len(state) == 0 {
+		return &Error{Status: StatusResumeRejected, Detail: "resume state is empty"}
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	st := Status(C.dhow_decoder_resume_verify(
+		d.ptr,
+		(*C.uint8_t)(unsafe.Pointer(&state[0])),
+		C.size_t(len(state)),
+	))
+	runtime.KeepAlive(state)
+	return wrap(st)
+}
+
+// ResumeInfo is what a resume file says about itself.
+type ResumeInfo struct {
+	// SessionID is the transfer the state belongs to.
+	SessionID [16]byte
+	// JournalBytes is the length of the journal prefix the state covers.
+	//
+	// A receiver appends to its journal continuously and rewrites the state
+	// periodically, so a crash routinely leaves the journal longer than this.
+	// Bytes past it were never durably recorded and must be discarded.
+	JournalBytes uint64
+	// BlockCount is the number of blocks the state describes.
+	BlockCount uint32
+}
+
+// ReadResumeState parses and integrity-checks a resume file.
+//
+// A restarting receiver needs this before it can build a decoder: the session
+// ID says whether the state belongs to the transfer in hand, and the journal
+// length says how much of the journal to replay.
+func ReadResumeState(state []byte) (ResumeInfo, error) {
+	var info ResumeInfo
+	if len(state) == 0 {
+		return info, &Error{Status: StatusResumeRejected, Detail: "resume state is empty"}
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	var journalBytes C.uint64_t
+	var blockCount C.uint32_t
+	st := Status(C.dhow_resume_state_read(
+		(*C.uint8_t)(unsafe.Pointer(&state[0])),
+		C.size_t(len(state)),
+		(*C.uint8_t)(unsafe.Pointer(&info.SessionID[0])),
+		&journalBytes,
+		&blockCount,
+	))
+	runtime.KeepAlive(state)
+	if st != StatusOK {
+		return ResumeInfo{}, wrap(st)
+	}
+
+	info.JournalBytes = uint64(journalBytes)
+	info.BlockCount = uint32(blockCount)
+	return info, nil
 }
 
 // Close releases the decoder.

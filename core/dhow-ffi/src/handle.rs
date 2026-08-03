@@ -20,6 +20,7 @@ use dhow_codec::pipeline::{Pipeline, PipelineDecoder};
 use dhow_codec::qr::{
     Ecc, QrCodeEncoder, capacity as qr_capacity, max_symbol_size as qr_max_symbol_size,
 };
+use dhow_codec::resume::ResumeFile;
 use dhow_codec::session::{RaptorQParams, SessionParams};
 use dhow_crypt::aead::{TransferKeys, decrypt_payload, encrypt_payload};
 use dhow_crypt::kdf::Salt;
@@ -642,6 +643,141 @@ pub unsafe extern "C" fn dhow_decoder_finish(
 
         // SAFETY: forwarded from this function's own contract.
         unsafe { write_out(&plaintext, buf, len, written) }
+    })
+}
+
+/// Serializes the decoder's progress as a resume file.
+///
+/// `journal_bytes` is the length of the caller's journal at this moment. The
+/// caller owns the journal, so only it knows how long the file is; the decoder
+/// knows only which frames were in it.
+///
+/// Call with a null `buf` to learn the required size.
+///
+/// # Safety
+///
+/// `decoder` must be a live handle; `buf` must be null or point to `len`
+/// writable bytes; `written` must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_decoder_resume_state(
+    decoder: *const DhowDecoder,
+    journal_bytes: u64,
+    buf: *mut u8,
+    len: usize,
+    written: *mut usize,
+) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        if decoder.is_null() {
+            return fail(DhowStatus::NullArgument, "decoder handle was null");
+        }
+        // SAFETY: `decoder` is non-null and the caller guarantees it is live.
+        let decoder = unsafe { &*decoder };
+
+        let state = decoder.inner.resume_state(journal_bytes).to_vec();
+        // SAFETY: forwarded from this function's own contract.
+        unsafe { write_out(&state, buf, len, written) }
+    })
+}
+
+/// Reads a resume file's header without needing a decoder.
+///
+/// A restarting receiver needs the session ID and journal length *before* it
+/// can build a decoder and replay: the length says how much of the journal is
+/// covered, and the session ID says whether this state belongs to the transfer
+/// in hand at all.
+///
+/// Returns [`DhowStatus::ResumeRejected`] if the file is malformed or fails its
+/// integrity checks. Any output pointer may be null if the caller does not
+/// want that field.
+///
+/// # Safety
+///
+/// `state` must point to `state_len` readable bytes. `session_id_out` must be
+/// null or point to 16 writable bytes; the other outputs must be null or
+/// writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_resume_state_read(
+    state: *const u8,
+    state_len: usize,
+    session_id_out: *mut u8,
+    journal_bytes_out: *mut u64,
+    block_count_out: *mut u32,
+) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        // SAFETY: forwarded from this function's own contract.
+        let Some(state) = (unsafe { slice_from(state, state_len) }) else {
+            return fail(DhowStatus::NullArgument, "resume state pointer was null");
+        };
+
+        let file = match ResumeFile::from_bytes(state) {
+            Ok(f) => f,
+            Err(e) => return fail(DhowStatus::ResumeRejected, e.to_string()),
+        };
+
+        if !session_id_out.is_null() {
+            let session_id = file.session_id();
+            // SAFETY: the caller guarantees 16 writable bytes, and the source
+            // is a local array that cannot overlap it.
+            unsafe {
+                std::ptr::copy_nonoverlapping(session_id.as_ptr(), session_id_out, 16);
+            }
+        }
+        if !journal_bytes_out.is_null() {
+            // SAFETY: the caller guarantees this is writable.
+            unsafe { *journal_bytes_out = file.journal_bytes() };
+        }
+        if !block_count_out.is_null() {
+            // SAFETY: the caller guarantees this is writable.
+            unsafe { *block_count_out = file.block_count() };
+        }
+
+        DhowStatus::Ok
+    })
+}
+
+/// Checks a resume file against what this decoder holds after a replay.
+///
+/// Returns [`DhowStatus::ResumeRejected`] when the state is malformed, belongs
+/// to another session, or describes a journal other than the one replayed.
+///
+/// This is not what keeps forged symbols out: every replayed frame is
+/// authenticated against the session key on the way in, and a resume file
+/// carries no key. What it catches is a stale, truncated, reordered, or
+/// swapped pair of files being mistaken for progress that was really made.
+///
+/// # Safety
+///
+/// `decoder` must be a live handle and `state` must point to `state_len`
+/// readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_decoder_resume_verify(
+    decoder: *const DhowDecoder,
+    state: *const u8,
+    state_len: usize,
+) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        if decoder.is_null() {
+            return fail(DhowStatus::NullArgument, "decoder handle was null");
+        }
+        // SAFETY: forwarded from this function's own contract.
+        let Some(state) = (unsafe { slice_from(state, state_len) }) else {
+            return fail(DhowStatus::NullArgument, "resume state pointer was null");
+        };
+        // SAFETY: `decoder` is non-null and the caller guarantees it is live.
+        let decoder = unsafe { &*decoder };
+
+        let file = match ResumeFile::from_bytes(state) {
+            Ok(f) => f,
+            Err(e) => return fail(DhowStatus::ResumeRejected, e.to_string()),
+        };
+
+        match decoder.inner.verify_resume(&file) {
+            Ok(()) => DhowStatus::Ok,
+            Err(e) => fail(DhowStatus::ResumeRejected, e.to_string()),
+        }
     })
 }
 

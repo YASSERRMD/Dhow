@@ -466,3 +466,323 @@ func TestTransferRecordCarriesNoSecret(t *testing.T) {
 		}
 	}
 }
+
+// --- Resume ---
+
+// sendFixture packs a dataset and returns the key, frame, and dataset dirs.
+//
+// The dataset is deliberately larger than the one the other tests use: a
+// resume test needs a stream long enough that stopping partway through it
+// really does leave work undone.
+func sendFixture(t *testing.T, blocks string) (key, frameDir, dataDir string) {
+	t.Helper()
+	work := t.TempDir()
+	dataDir = fixture(t)
+	key = keygen(t, work)
+
+	bulk := make([]byte, 64*1024)
+	for i := range bulk {
+		bulk[i] = byte(i % 251)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "bulk.bin"), bulk, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	frameDir = filepath.Join(work, "frames")
+
+	code, _, errOut := run("send", "-key", key, "-in", dataDir,
+		"-out", frameDir, "-blocks", blocks, "-symbol-size", "256")
+	if code != ExitOK {
+		t.Fatalf("send exited %d: %s", code, errOut)
+	}
+	return key, frameDir, dataDir
+}
+
+// sameTree reports whether two directories hold identical files.
+func sameTree(t *testing.T, want, got string) {
+	t.Helper()
+	wantNames, gotNames := listFiles(t, want), listFiles(t, got)
+	if len(wantNames) != len(gotNames) {
+		t.Fatalf("received %v, want %v", gotNames, wantNames)
+	}
+	for i, name := range wantNames {
+		if gotNames[i] != name {
+			t.Fatalf("received %v, want %v", gotNames, wantNames)
+		}
+		a, err := os.ReadFile(filepath.Join(want, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		b, err := os.ReadFile(filepath.Join(got, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if !bytes.Equal(a, b) {
+			t.Errorf("%s differs after the transfer", name)
+		}
+	}
+}
+
+func TestRecvResumesAfterAnInterruption(t *testing.T) {
+	key, frameDir, dataDir := sendFixture(t, "4")
+	work := t.TempDir()
+	stateDir := filepath.Join(work, "state")
+	outDir := filepath.Join(work, "received")
+
+	// Stop partway. The run must fail as incomplete and say where the
+	// progress went, because an operator who does not know that has lost it.
+	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir,
+		"-state", stateDir, "-stop-after", "30", "-save-every", "10")
+	if code != ExitIncomplete {
+		t.Fatalf("interrupted recv exited %d, want %d: %s", code, ExitIncomplete, errOut)
+	}
+	if !strings.Contains(errOut, stateDir) {
+		t.Errorf("the incomplete message does not name the state directory: %s", errOut)
+	}
+
+	for _, name := range []string{"journal.bin", "resume.dhrs"} {
+		if _, err := os.Stat(filepath.Join(stateDir, name)); err != nil {
+			t.Fatalf("expected %s to exist: %v", name, err)
+		}
+	}
+
+	// Resume. The transfer must complete and the dataset must come back whole.
+	code, out, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir,
+		"-state", stateDir)
+	if code != ExitOK {
+		t.Fatalf("resumed recv exited %d: %s", code, errOut)
+	}
+	if !strings.Contains(out, "resumed") {
+		t.Errorf("a resumed transfer did not report what it resumed: %s", out)
+	}
+	sameTree(t, dataDir, outDir)
+
+	// The state has done its job and must not be left to confuse the next run.
+	for _, name := range []string{"journal.bin", "resume.dhrs"} {
+		if _, err := os.Stat(filepath.Join(stateDir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s survived a completed transfer", name)
+		}
+	}
+}
+
+func TestRecvResumesAcrossSeveralInterruptions(t *testing.T) {
+	// One stop could be recovered by luck. Repeated stops exercise a journal
+	// that is replayed, extended, and replayed again.
+	key, frameDir, dataDir := sendFixture(t, "3")
+	work := t.TempDir()
+	stateDir := filepath.Join(work, "state")
+	outDir := filepath.Join(work, "received")
+
+	for _, limit := range []string{"20", "40", "60"} {
+		code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir,
+			"-state", stateDir, "-stop-after", limit, "-save-every", "7")
+		if code != ExitIncomplete {
+			t.Fatalf("recv with -stop-after %s exited %d: %s", limit, code, errOut)
+		}
+	}
+
+	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir, "-state", stateDir)
+	if code != ExitOK {
+		t.Fatalf("final recv exited %d: %s", code, errOut)
+	}
+	sameTree(t, dataDir, outDir)
+}
+
+func TestRecvWithoutStateDoesNotPersistAnything(t *testing.T) {
+	// Resume is opt-in. Without -state the receiver must behave exactly as it
+	// did before and leave nothing behind.
+	key, frameDir, dataDir := sendFixture(t, "2")
+	work := t.TempDir()
+	outDir := filepath.Join(work, "received")
+
+	code, out, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir)
+	if code != ExitOK {
+		t.Fatalf("recv exited %d: %s", code, errOut)
+	}
+	if strings.Contains(out, "resumed") {
+		t.Errorf("a fresh transfer reported resuming: %s", out)
+	}
+	sameTree(t, dataDir, outDir)
+
+	entries, err := os.ReadDir(work)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if e.Name() != "received" {
+			t.Errorf("recv left %s behind without -state", e.Name())
+		}
+	}
+}
+
+// interrupted runs recv far enough to leave saved state, and returns the dirs.
+func interrupted(t *testing.T, key, frameDir string) (stateDir, outDir string) {
+	t.Helper()
+	work := t.TempDir()
+	stateDir = filepath.Join(work, "state")
+	outDir = filepath.Join(work, "received")
+
+	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir,
+		"-state", stateDir, "-stop-after", "25", "-save-every", "5")
+	if code != ExitIncomplete {
+		t.Fatalf("interrupted recv exited %d: %s", code, errOut)
+	}
+	return stateDir, outDir
+}
+
+// flipByte corrupts one byte of a file in place.
+func flipByte(t *testing.T, path string, offset int) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if offset >= len(data) {
+		t.Fatalf("offset %d is past the end of %s (%d bytes)", offset, path, len(data))
+	}
+	data[offset] ^= 0x01
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+func TestRecvRejectsATamperedIndex(t *testing.T) {
+	key, frameDir, _ := sendFixture(t, "2")
+	stateDir, outDir := interrupted(t, key, frameDir)
+
+	// Offset 40 is inside the journal digest, the field an attacker would have
+	// to rewrite to make a doctored journal look expected.
+	flipByte(t, filepath.Join(stateDir, "resume.dhrs"), 40)
+
+	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir, "-state", stateDir)
+	if code != ExitInput {
+		t.Fatalf("recv with a tampered index exited %d, want %d: %s", code, ExitInput, errOut)
+	}
+	if !strings.Contains(errOut, "unusable") {
+		t.Errorf("the error does not say the state is unusable: %s", errOut)
+	}
+	if !strings.Contains(errOut, "delete") {
+		t.Errorf("the error does not say what to do about it: %s", errOut)
+	}
+}
+
+func TestRecvRejectsATamperedJournal(t *testing.T) {
+	key, frameDir, _ := sendFixture(t, "2")
+	stateDir, outDir := interrupted(t, key, frameDir)
+
+	// A frame body, past the record's length prefix. The decoder must refuse
+	// it on the way back in exactly as it would a corrupt capture.
+	flipByte(t, filepath.Join(stateDir, "journal.bin"), 60)
+
+	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir, "-state", stateDir)
+	if code != ExitInput {
+		t.Fatalf("recv with a tampered journal exited %d, want %d: %s", code, ExitInput, errOut)
+	}
+	if !strings.Contains(errOut, "replaying saved progress") {
+		t.Errorf("the error does not name the replay as the problem: %s", errOut)
+	}
+}
+
+func TestRecvRejectsATruncatedJournal(t *testing.T) {
+	key, frameDir, _ := sendFixture(t, "2")
+	stateDir, outDir := interrupted(t, key, frameDir)
+
+	path := filepath.Join(stateDir, "journal.bin")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	// Shorter than the index says. A crash cannot produce this, because the
+	// journal is flushed before the index that describes it is written.
+	if err := os.Truncate(path, info.Size()/2); err != nil {
+		t.Fatalf("Truncate: %v", err)
+	}
+
+	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir, "-state", stateDir)
+	if code != ExitInput {
+		t.Fatalf("recv with a truncated journal exited %d, want %d: %s", code, ExitInput, errOut)
+	}
+}
+
+func TestRecvRejectsStateFromAnotherSession(t *testing.T) {
+	// Two transfers, one operator pointing the second at the first's state.
+	key, frameDir, _ := sendFixture(t, "2")
+	stateDir, _ := interrupted(t, key, frameDir)
+
+	work := t.TempDir()
+	otherFrames := filepath.Join(work, "frames")
+	code, _, errOut := run("send", "-key", key, "-in", fixture(t),
+		"-out", otherFrames, "-blocks", "2", "-symbol-size", "256")
+	if code != ExitOK {
+		t.Fatalf("send exited %d: %s", code, errOut)
+	}
+
+	code, _, errOut = run("recv", "-key", key, "-in", otherFrames,
+		"-out", filepath.Join(work, "received"), "-state", stateDir)
+	if code != ExitInput {
+		t.Fatalf("recv with foreign state exited %d, want %d: %s", code, ExitInput, errOut)
+	}
+	if !strings.Contains(errOut, "belongs to session") {
+		t.Errorf("the error does not name the session mismatch: %s", errOut)
+	}
+}
+
+func TestRecvKeepStateLeavesTheDirectoryPopulated(t *testing.T) {
+	key, frameDir, dataDir := sendFixture(t, "2")
+	work := t.TempDir()
+	stateDir := filepath.Join(work, "state")
+	outDir := filepath.Join(work, "received")
+
+	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir,
+		"-state", stateDir, "-keep-state")
+	if code != ExitOK {
+		t.Fatalf("recv exited %d: %s", code, errOut)
+	}
+	sameTree(t, dataDir, outDir)
+
+	for _, name := range []string{"journal.bin", "resume.dhrs"} {
+		if _, err := os.Stat(filepath.Join(stateDir, name)); err != nil {
+			t.Errorf("-keep-state did not keep %s: %v", name, err)
+		}
+	}
+}
+
+func TestRecvRejectsAZeroSaveInterval(t *testing.T) {
+	key, frameDir, _ := sendFixture(t, "2")
+	work := t.TempDir()
+
+	code, _, errOut := run("recv", "-key", key, "-in", frameDir,
+		"-out", filepath.Join(work, "received"),
+		"-state", filepath.Join(work, "state"), "-save-every", "0")
+	if code != ExitUsage {
+		t.Fatalf("recv with -save-every 0 exited %d, want %d: %s", code, ExitUsage, errOut)
+	}
+}
+
+func TestRecvJSONReportsResumeCounts(t *testing.T) {
+	key, frameDir, _ := sendFixture(t, "2")
+	stateDir, outDir := interrupted(t, key, frameDir)
+
+	code, out, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir,
+		"-state", stateDir, "-json")
+	if code != ExitOK {
+		t.Fatalf("recv exited %d: %s", code, errOut)
+	}
+
+	var result struct {
+		Resumed  int    `json:"frames_resumed"`
+		Accepted int    `json:"frames_accepted"`
+		StateDir string `json:"state_dir"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("parsing JSON output: %v\n%s", err, out)
+	}
+	if result.Resumed != 25 {
+		t.Errorf("frames_resumed = %d, want 25", result.Resumed)
+	}
+	if result.Accepted == 0 {
+		t.Error("frames_accepted = 0 after a resume")
+	}
+	if result.StateDir != stateDir {
+		t.Errorf("state_dir = %q, want %q", result.StateDir, stateDir)
+	}
+}

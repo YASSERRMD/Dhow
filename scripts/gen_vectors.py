@@ -13,10 +13,11 @@ No randomness is used except for the session ID, which is a fixed test value.
 """
 
 import struct
-import hashlib
 import json
 import sys
 import os
+
+from blake3_ref import blake3 as blake3_ref
 
 # Fixed test session ID (16 bytes)
 TEST_SESSION_ID = bytes(range(16))  # 0x000102030405060708090a0b0c0d0e0f
@@ -47,9 +48,7 @@ def crc32c(data: bytes) -> int:
 
 def blake3(data: bytes) -> bytes:
     """Compute BLAKE3 digest (32 bytes)."""
-    h = hashlib.blake2b(digest_size=32)
-    h.update(data)
-    return h.digest()
+    return blake3_ref(data)
 
 
 def generate_frame_header_vector() -> dict:
@@ -222,37 +221,43 @@ def generate_manifest_header_vector() -> dict:
 def generate_resume_header_vector() -> dict:
     """Generate a golden vector for a resume file header."""
     magic = b"DHRS"
-    version = 0x01
+    version = 0x02
     reserved = b"\x00\x00\x00"
     session_id = TEST_SESSION_ID
     block_count = 0x00000004
-    reserved2 = b"\x00" * 32
+    journal_bytes = 0x0000000000002710  # 10000
+    journal_digest = blake3(b"dhow resume journal vector")
+    reserved2 = b"\x00" * 24
 
-    # Build header (without CRC and integrity digest)
+    # Build the header up to but not including the CRC.
     header_no_crc = (
         magic
         + struct.pack("<B", version)
         + reserved
         + session_id
         + struct.pack("<I", block_count)
+        + struct.pack("<Q", journal_bytes)
+        + journal_digest
         + reserved2
     )
+    assert len(header_no_crc) == 92, len(header_no_crc)
 
     crc = crc32c(header_no_crc)
     integrity_digest = blake3(header_no_crc + struct.pack("<I", crc))
     header = header_no_crc + struct.pack("<I", crc) + integrity_digest
 
     return {
-        "name": "resume_header_v1",
-        "description": "Golden vector for resume file header v1",
+        "name": "resume_header_v2",
+        "description": "Golden vector for resume file header v2",
         "inputs": {
             "magic": "DHRS",
-            "version": 1,
+            "version": 2,
             "reserved": 0,
             "session_id": session_id.hex(),
             "block_count": block_count,
+            "journal_bytes": journal_bytes,
+            "journal_digest": journal_digest.hex(),
             "reserved2": reserved2.hex(),
-            "integrity_digest": integrity_digest.hex(),
         },
         "outputs": {
             "header_hex": header.hex(),
@@ -296,26 +301,28 @@ def generate_file_entry_vector() -> dict:
 def generate_block_entry_vector() -> dict:
     """Generate a golden vector for a resume block entry."""
     block_index = 0x00000001
-    symbol_count = 0x00000014  # 20
-    symbols_held = 0x00000010  # 16
-    # Bitmap: first 16 bits set (16 symbols held out of 20)
-    bitmap = 0xFFFF
-    bitmap_bytes = struct.pack("<I", bitmap)
+    symbol_count = 0x00000014  # 20 symbols, so ceil(20/8) = 3 bitmap bytes
+    held = list(range(16))
+
+    bitmap = bytearray((symbol_count + 7) // 8)
+    for symbol in held:
+        bitmap[symbol // 8] |= 1 << (symbol % 8)
+    bitmap_bytes = bytes(bitmap)
 
     entry = (
         struct.pack("<I", block_index)
         + struct.pack("<I", symbol_count)
-        + struct.pack("<I", symbols_held)
+        + struct.pack("<I", len(held))
         + bitmap_bytes
     )
 
     return {
-        "name": "resume_block_entry_v1",
-        "description": "Golden vector for resume block entry v1",
+        "name": "resume_block_entry_v2",
+        "description": "Golden vector for resume block entry v2",
         "inputs": {
             "block_index": block_index,
             "symbol_count": symbol_count,
-            "symbols_held": symbols_held,
+            "symbols_held": len(held),
             "bitmap": bitmap_bytes.hex(),
         },
         "outputs": {
@@ -396,55 +403,67 @@ def generate_full_manifest_vector() -> dict:
 def generate_full_resume_vector() -> dict:
     """Generate a golden vector for a full resume file with block entries."""
     magic = b"DHRS"
-    version = 0x01
+    version = 0x02
     reserved = b"\x00\x00\x00"
     session_id = TEST_SESSION_ID
     block_count = 0x00000004
-    reserved2 = b"\x00" * 32
+    journal_bytes = 0x0000000000002710  # 10000
+    journal_digest = blake3(b"dhow resume journal vector")
+    reserved2 = b"\x00" * 24
 
-    # Build header (without CRC and integrity digest)
     header_no_crc = (
         magic
         + struct.pack("<B", version)
         + reserved
         + session_id
         + struct.pack("<I", block_count)
+        + struct.pack("<Q", journal_bytes)
+        + journal_digest
         + reserved2
     )
 
     crc = crc32c(header_no_crc)
     integrity_digest = blake3(header_no_crc + struct.pack("<I", crc))
 
-    # Build block entries
+    # Four blocks of 20 symbols: the first two hold symbols 0..15, the rest
+    # hold none. 20 symbols occupy three bytes of bitmap, and the bits past
+    # symbol 19 stay clear because a reader rejects bits it cannot place.
+    described = []
     block_entries = b""
-    for i in range(4):
-        block_index = i
+    for i in range(block_count):
         symbol_count = 20
-        symbols_held = 16 if i < 2 else 0
-        bitmap = 0xFFFF if i < 2 else 0x0000
+        held = list(range(16)) if i < 2 else []
+        bitmap = bytearray((symbol_count + 7) // 8)
+        for symbol in held:
+            bitmap[symbol // 8] |= 1 << (symbol % 8)
         block_entries += (
-            struct.pack("<I", block_index)
+            struct.pack("<I", i)
             + struct.pack("<I", symbol_count)
-            + struct.pack("<I", symbols_held)
-            + struct.pack("<I", bitmap)
+            + struct.pack("<I", len(held))
+            + bytes(bitmap)
+        )
+        described.append(
+            {
+                "block_index": i,
+                "symbol_count": symbol_count,
+                "symbols_held": len(held),
+                "bitmap": bytes(bitmap).hex(),
+            }
         )
 
     full_resume = header_no_crc + struct.pack("<I", crc) + integrity_digest + block_entries
 
     return {
-        "name": "full_resume_v1",
-        "description": "Golden vector for full resume file with block entries v1",
+        "name": "full_resume_v2",
+        "description": "Golden vector for full resume file with block entries v2",
         "inputs": {
             "magic": "DHRS",
-            "version": 1,
+            "version": 2,
             "session_id": session_id.hex(),
             "block_count": block_count,
-            "block_entries": [
-                {"block_index": 0, "symbol_count": 20, "symbols_held": 16, "bitmap": "ffff"},
-                {"block_index": 1, "symbol_count": 20, "symbols_held": 16, "bitmap": "ffff"},
-                {"block_index": 2, "symbol_count": 20, "symbols_held": 0, "bitmap": "0000"},
-                {"block_index": 3, "symbol_count": 20, "symbols_held": 0, "bitmap": "0000"},
-            ],
+            "journal_bytes": journal_bytes,
+            "journal_digest": journal_digest.hex(),
+            "block_entries": described,
         },
         "outputs": {
             "resume_hex": full_resume.hex(),

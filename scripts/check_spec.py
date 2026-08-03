@@ -33,9 +33,9 @@ def check_vector_sizes(data):
         "frame_header_v1": 46,
         "session_header_v1": 126,
         "manifest_header_v1": 168,
-        "resume_header_v1": 96,
+        "resume_header_v2": 128,
         "manifest_file_entry_v1": 55,
-        "resume_block_entry_v1": 16,
+        "resume_block_entry_v2": 15,
     }
 
     for vector in data["vectors"]:
@@ -85,10 +85,10 @@ def check_field_offsets():
     if sum(manifest_fields) != 168:
         errors.append(f"  manifest_header: field offsets sum to {sum(manifest_fields)}, expected 168")
 
-    # Resume header: 4 + 1 + 3 + 16 + 4 + 32 + 4 + 32 = 96
-    resume_fields = [4, 1, 3, 16, 4, 32, 4, 32]
-    if sum(resume_fields) != 96:
-        errors.append(f"  resume_header: field offsets sum to {sum(resume_fields)}, expected 96")
+    # Resume header v2: 4 + 1 + 3 + 16 + 4 + 8 + 32 + 24 + 4 + 32 = 128
+    resume_fields = [4, 1, 3, 16, 4, 8, 32, 24, 4, 32]
+    if sum(resume_fields) != 128:
+        errors.append(f"  resume_header: field offsets sum to {sum(resume_fields)}, expected 128")
 
     return errors
 

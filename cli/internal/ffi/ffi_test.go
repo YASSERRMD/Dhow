@@ -88,8 +88,8 @@ func transfer(t *testing.T, plaintext []byte, keep func(i int) bool) ([]byte, er
 func TestABIVersionMatches(t *testing.T) {
 	// A mismatch means Go and Rust disagree about handle layout, which must be
 	// caught at startup rather than surfacing as memory corruption.
-	if got := ABIVersion(); got != 1 {
-		t.Errorf("ABIVersion() = %d, want 1", got)
+	if got := ABIVersion(); got != 2 {
+		t.Errorf("ABIVersion() = %d, want 2", got)
 	}
 }
 
@@ -420,7 +420,7 @@ func TestStatusStringsAreAvailable(t *testing.T) {
 		StatusOK, StatusNullArgument, StatusInvalidArgument, StatusBufferTooSmall,
 		StatusInvalidParameters, StatusFrameRejected, StatusIncomplete,
 		StatusVerificationFail, StatusCryptoFailed, StatusKeyFailed,
-		StatusInternal, StatusPanic,
+		StatusInternal, StatusPanic, StatusResumeRejected,
 	} {
 		if got := statusString(s); got == "" || got == "unknown status" {
 			t.Errorf("status %d has no description (got %q)", s, got)
@@ -492,5 +492,236 @@ func TestConcurrentTransfersDoNotInterfere(t *testing.T) {
 		if err := <-errCh; err != nil {
 			t.Errorf("concurrent transfer failed: %v", err)
 		}
+	}
+}
+
+// --- Resume ---
+
+// encodeSession builds the frames for a transfer and the parameters a decoder
+// needs to read them back.
+func encodeSession(t *testing.T, plaintext []byte) (*Key, [][]byte, SessionParams) {
+	t.Helper()
+
+	key, err := GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	t.Cleanup(key.Close)
+
+	enc, err := NewEncoder(key, testSession, testSalt, testNonce, paramsFor(len(plaintext)), plaintext)
+	if err != nil {
+		t.Fatalf("NewEncoder: %v", err)
+	}
+	defer enc.Close()
+
+	frames, err := enc.Frames()
+	if err != nil {
+		t.Fatalf("Frames: %v", err)
+	}
+	params, err := enc.Params()
+	if err != nil {
+		t.Fatalf("Params: %v", err)
+	}
+	return key, frames, params
+}
+
+// fedDecoder returns a decoder that has accepted every frame in stream.
+func fedDecoder(t *testing.T, key *Key, params SessionParams, stream [][]byte) *Decoder {
+	t.Helper()
+
+	dec, err := NewDecoder(key, testSession, testSalt, params)
+	if err != nil {
+		t.Fatalf("NewDecoder: %v", err)
+	}
+	t.Cleanup(dec.Close)
+
+	for i, frame := range stream {
+		if err := dec.Accept(frame); err != nil {
+			t.Fatalf("Accept(%d): %v", i, err)
+		}
+	}
+	return dec
+}
+
+func TestResumeStateCompletesAnInterruptedTransfer(t *testing.T) {
+	plaintext := make([]byte, 8192)
+	for i := range plaintext {
+		plaintext[i] = byte(i % 251)
+	}
+
+	key, frames, params := encodeSession(t, plaintext)
+
+	// Stop a third of the way through, as a killed receiver would.
+	taken := frames[:len(frames)/3]
+	var journalBytes uint64
+	for _, f := range taken {
+		journalBytes += uint64(len(f))
+	}
+
+	first := fedDecoder(t, key, params, taken)
+	if complete, err := first.IsComplete(); err != nil || complete {
+		t.Fatalf("the test needs an unfinished transfer (complete=%v err=%v)", complete, err)
+	}
+	state, err := first.ResumeState(journalBytes)
+	if err != nil {
+		t.Fatalf("ResumeState: %v", err)
+	}
+
+	info, err := ReadResumeState(state)
+	if err != nil {
+		t.Fatalf("ReadResumeState: %v", err)
+	}
+	if info.SessionID != testSession {
+		t.Errorf("session = %x, want %x", info.SessionID, testSession)
+	}
+	if info.JournalBytes != journalBytes {
+		t.Errorf("journal bytes = %d, want %d", info.JournalBytes, journalBytes)
+	}
+	if info.BlockCount != params.BlockCount {
+		t.Errorf("block count = %d, want %d", info.BlockCount, params.BlockCount)
+	}
+
+	// Replay, verify, and finish from what was still to come.
+	second := fedDecoder(t, key, params, taken)
+	if err := second.VerifyResume(state); err != nil {
+		t.Fatalf("VerifyResume on a faithful replay: %v", err)
+	}
+	for i, frame := range frames[len(taken):] {
+		if err := second.Accept(frame); err != nil {
+			t.Fatalf("Accept after resume (%d): %v", i, err)
+		}
+	}
+
+	out, err := second.Finish(key, testSession, testSalt, testNonce)
+	if err != nil {
+		t.Fatalf("Finish after resume: %v", err)
+	}
+	if !bytes.Equal(out, plaintext) {
+		t.Errorf("resumed transfer recovered %d bytes, want %d", len(out), len(plaintext))
+	}
+}
+
+func TestVerifyResumeRejectsADivergentReplay(t *testing.T) {
+	plaintext := make([]byte, 4096)
+	key, frames, params := encodeSession(t, plaintext)
+
+	taken := frames[:10]
+	state, err := fedDecoder(t, key, params, taken).ResumeState(1000)
+	if err != nil {
+		t.Fatalf("ResumeState: %v", err)
+	}
+
+	for name, stream := range map[string][][]byte{
+		"one frame short":  taken[:len(taken)-1],
+		"nothing replayed": {},
+		"one frame extra":  frames[:11],
+	} {
+		err := fedDecoder(t, key, params, stream).VerifyResume(state)
+		if !errors.Is(err, ErrResumeRejected) {
+			t.Errorf("%s: err = %v, want ErrResumeRejected", name, err)
+		}
+	}
+}
+
+func TestResumeStateRejectsCorruptionAndTruncation(t *testing.T) {
+	plaintext := make([]byte, 2048)
+	key, frames, params := encodeSession(t, plaintext)
+	dec := fedDecoder(t, key, params, frames[:6])
+
+	good, err := dec.ResumeState(700)
+	if err != nil {
+		t.Fatalf("ResumeState: %v", err)
+	}
+
+	for _, offset := range []int{0, 4, 8, 30, 40, 92, 100, len(good) - 1} {
+		bad := bytes.Clone(good)
+		bad[offset] ^= 0x01
+		if _, err := ReadResumeState(bad); !errors.Is(err, ErrResumeRejected) {
+			t.Errorf("ReadResumeState accepted a flip at %d: %v", offset, err)
+		}
+		if err := dec.VerifyResume(bad); !errors.Is(err, ErrResumeRejected) {
+			t.Errorf("VerifyResume accepted a flip at %d: %v", offset, err)
+		}
+	}
+
+	for _, n := range []int{0, 1, 64, 127, len(good) - 1} {
+		if _, err := ReadResumeState(good[:n]); !errors.Is(err, ErrResumeRejected) {
+			t.Errorf("ReadResumeState accepted %d bytes: %v", n, err)
+		}
+	}
+}
+
+func TestResumeStateRejectsAnotherSession(t *testing.T) {
+	plaintext := make([]byte, 2048)
+	key, frames, params := encodeSession(t, plaintext)
+
+	other := [16]byte{0x99, 0x88}
+	enc, err := NewEncoder(key, other, testSalt, testNonce, paramsFor(len(plaintext)), plaintext)
+	if err != nil {
+		t.Fatalf("NewEncoder: %v", err)
+	}
+	defer enc.Close()
+	otherFrames, err := enc.Frames()
+	if err != nil {
+		t.Fatalf("Frames: %v", err)
+	}
+
+	otherDec, err := NewDecoder(key, other, testSalt, params)
+	if err != nil {
+		t.Fatalf("NewDecoder: %v", err)
+	}
+	defer otherDec.Close()
+	for _, f := range otherFrames[:6] {
+		if err := otherDec.Accept(f); err != nil {
+			t.Fatalf("Accept: %v", err)
+		}
+	}
+	state, err := otherDec.ResumeState(500)
+	if err != nil {
+		t.Fatalf("ResumeState: %v", err)
+	}
+
+	// The state announces its own session, so a caller can refuse it before
+	// replaying anything.
+	info, err := ReadResumeState(state)
+	if err != nil {
+		t.Fatalf("ReadResumeState: %v", err)
+	}
+	if info.SessionID != other {
+		t.Errorf("session = %x, want %x", info.SessionID, other)
+	}
+
+	err = fedDecoder(t, key, params, frames[:6]).VerifyResume(state)
+	if !errors.Is(err, ErrResumeRejected) {
+		t.Errorf("VerifyResume across sessions: err = %v, want ErrResumeRejected", err)
+	}
+}
+
+func TestResumeCallsOnClosedHandlesAreRefused(t *testing.T) {
+	plaintext := make([]byte, 1024)
+	key, frames, params := encodeSession(t, plaintext)
+
+	dec, err := NewDecoder(key, testSession, testSalt, params)
+	if err != nil {
+		t.Fatalf("NewDecoder: %v", err)
+	}
+	if err := dec.Accept(frames[0]); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	state, err := dec.ResumeState(100)
+	if err != nil {
+		t.Fatalf("ResumeState: %v", err)
+	}
+	dec.Close()
+
+	if _, err := dec.ResumeState(100); err == nil {
+		t.Error("ResumeState on a closed decoder returned no error")
+	}
+	if err := dec.VerifyResume(state); err == nil {
+		t.Error("VerifyResume on a closed decoder returned no error")
+	}
+	var nilDec *Decoder
+	if _, err := nilDec.ResumeState(0); err == nil {
+		t.Error("ResumeState on a nil decoder returned no error")
 	}
 }

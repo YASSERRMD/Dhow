@@ -53,11 +53,12 @@
 //! assert_eq!(decoder.finish().unwrap(), payload);
 //! ```
 
-use crate::blake3::blake3_digest;
+use crate::blake3::{Blake3Hasher, DIGEST_LEN, blake3_digest};
 use crate::chunker::{ChunkMap, ChunkParams};
 use crate::frame::{FRAME_HEADER_SIZE, Frame, FrameHeader, FrameType, MAX_PAYLOAD_LEN};
+use crate::resume::{BlockEntry, ResumeFile};
 use crate::session::SessionParams;
-use crate::{CodecError, FecError, FrameError, SessionError};
+use crate::{CodecError, FecError, FrameError, ResumeError, SessionError};
 use raptorq::{Decoder, Encoder, EncodingPacket, ObjectTransmissionInformation};
 
 /// The session key used for frame MAC computation.
@@ -303,6 +304,22 @@ pub struct PipelineDecoder {
     session_key: SessionKey,
     chunk_map: ChunkMap,
     blocks: Vec<BlockState>,
+    /// One bitmap per block, one bit per symbol index, LSB first.
+    ///
+    /// RaptorQ's own decoder state cannot be serialized, so a receiver that
+    /// wants to survive a restart replays the frames it kept. This record is
+    /// what the resume file publishes: it says what the replay must reproduce,
+    /// which is how a truncated or doctored journal is caught.
+    held: Vec<Vec<u8>>,
+    /// Count of distinct symbol indices held per block.
+    held_counts: Vec<u32>,
+    /// Rolling BLAKE3 over the bytes of every accepted frame, in the order
+    /// they were accepted.
+    ///
+    /// A receiver appends exactly those frames to its journal in exactly that
+    /// order, so replaying the journal into a fresh decoder reproduces this
+    /// digest. Any reordering, insertion, or truncation changes it.
+    journal: Blake3Hasher,
 }
 
 impl PipelineDecoder {
@@ -331,13 +348,41 @@ impl PipelineDecoder {
             })
             .collect();
 
+        let bitmap_len = (params.total_symbols_per_block as usize).div_ceil(8);
+        let block_count = chunk_map.blocks.len();
+
         Ok(Self {
             session_id,
             params,
             session_key,
             chunk_map,
             blocks,
+            held: vec![vec![0u8; bitmap_len]; block_count],
+            held_counts: vec![0u32; block_count],
+            journal: Blake3Hasher::new(),
         })
+    }
+
+    /// Records that `symbol_index` of `block_index` has been seen.
+    ///
+    /// Returns true when the bit was not already set. An index at or beyond
+    /// `total_symbols_per_block` is outside the bitmap and is ignored: the
+    /// sender never emits one, and a frame carrying one has already passed its
+    /// MAC, so growing an allocation to fit it would let a caller with the
+    /// session key steer the receiver's memory use.
+    fn mark_held(&mut self, block_index: u32, symbol_index: u32) -> bool {
+        if symbol_index >= self.params.total_symbols_per_block {
+            return false;
+        }
+        let bitmap = &mut self.held[block_index as usize];
+        let (byte, bit) = (symbol_index as usize / 8, symbol_index % 8);
+        let mask = 1u8 << bit;
+        if bitmap[byte] & mask != 0 {
+            return false;
+        }
+        bitmap[byte] |= mask;
+        self.held_counts[block_index as usize] += 1;
+        true
     }
 
     /// Parses, authenticates, and consumes one serialized frame.
@@ -367,20 +412,18 @@ impl PipelineDecoder {
         }
 
         let block_index = header.block_index();
-        let state =
-            self.blocks
-                .get_mut(block_index as usize)
-                .ok_or(FrameError::SessionMismatch {
-                    expected: self.session_id,
-                    actual: header.session_id(),
-                })?;
-
-        let BlockState::Pending(decoder) = state else {
-            return Ok(FrameOutcome::Redundant);
-        };
+        if block_index as usize >= self.blocks.len() {
+            return Err(FrameError::SessionMismatch {
+                expected: self.session_id,
+                actual: header.session_id(),
+            }
+            .into());
+        }
 
         // RaptorQ's deserializer indexes the first four bytes unchecked, so a
-        // short payload would panic. Reject it here instead.
+        // short payload would panic. Reject it here instead. This runs before
+        // the block's state is consulted so a malformed frame is rejected the
+        // same way whether or not its block has already decoded.
         let payload = frame.payload();
         if payload.len() <= PAYLOAD_ID_LEN {
             return Err(FecError::InvalidSourceBlock {
@@ -393,6 +436,18 @@ impl PipelineDecoder {
             .into());
         }
 
+        // Past this point the frame is accepted, so it joins the record of
+        // what was taken. Both the bitmap and the journal digest are updated
+        // for every accepted frame, including one whose block has already
+        // decoded: a receiver writes those to its journal too, and the two
+        // records have to describe the same stream.
+        self.mark_held(block_index, header.symbol_index());
+        self.journal.update(bytes);
+
+        let BlockState::Pending(decoder) = &mut self.blocks[block_index as usize] else {
+            return Ok(FrameOutcome::Redundant);
+        };
+
         decoder.add_new_packet(EncodingPacket::deserialize(payload));
 
         match decoder.get_result() {
@@ -402,6 +457,32 @@ impl PipelineDecoder {
             }
             None => Ok(FrameOutcome::Accepted),
         }
+    }
+
+    /// Returns the bitmap of symbol indices held for `block_index`.
+    ///
+    /// One bit per symbol, LSB of byte 0 being symbol 0. Returns `None` for a
+    /// block index outside the session.
+    pub fn symbol_bitmap(&self, block_index: u32) -> Option<&[u8]> {
+        self.held.get(block_index as usize).map(Vec::as_slice)
+    }
+
+    /// Returns how many distinct symbols are held for `block_index`.
+    pub fn symbols_held(&self, block_index: u32) -> Option<u32> {
+        self.held_counts.get(block_index as usize).copied()
+    }
+
+    /// Returns the number of blocks in this session.
+    pub fn block_count(&self) -> u32 {
+        self.blocks.len() as u32
+    }
+
+    /// Returns the rolling digest over every accepted frame, in order.
+    ///
+    /// Replaying the same frames in the same order into a fresh decoder yields
+    /// the same value; any other stream yields a different one.
+    pub fn journal_digest(&self) -> [u8; DIGEST_LEN] {
+        self.journal.clone().finalize()
     }
 
     /// Returns true once every block has decoded.
@@ -443,6 +524,86 @@ impl PipelineDecoder {
         }
 
         Ok(payload)
+    }
+
+    /// Builds a resume file describing this decoder's progress.
+    ///
+    /// `journal_bytes` is the length of the caller's journal at this moment.
+    /// The caller owns the journal, so only it knows how long the file is; the
+    /// decoder knows only what the frames in it were.
+    pub fn resume_state(&self, journal_bytes: u64) -> ResumeFile {
+        let entries: Vec<BlockEntry> = (0..self.blocks.len())
+            .map(|index| {
+                BlockEntry::new(
+                    index as u32,
+                    self.params.total_symbols_per_block,
+                    self.held_counts[index],
+                    &self.held[index],
+                )
+            })
+            .collect();
+
+        ResumeFile::new(
+            self.session_id,
+            journal_bytes,
+            self.journal_digest(),
+            &entries,
+        )
+    }
+
+    /// Checks a resume file against what this decoder actually holds.
+    ///
+    /// Called after replaying a journal: the file says what the replay should
+    /// have produced, and this reports whether it did. A mismatch means the
+    /// journal and its index describe different things, which is a reason to
+    /// stop rather than to guess which one is right.
+    ///
+    /// The frames were each authenticated on the way in, so this is not what
+    /// keeps forged symbols out. It is what keeps a *stale* or *swapped* pair
+    /// of files from being mistaken for progress that was really made.
+    pub fn verify_resume(&self, state: &ResumeFile) -> Result<(), CodecError> {
+        if state.session_id() != self.session_id {
+            return Err(ResumeError::SessionMismatch.into());
+        }
+
+        if state.block_count() != self.block_count() {
+            return Err(ResumeError::JournalMismatch {
+                details: format!(
+                    "resume state covers {} blocks, session has {}",
+                    state.block_count(),
+                    self.block_count()
+                ),
+            }
+            .into());
+        }
+
+        if state.journal_digest() != self.journal_digest() {
+            return Err(ResumeError::JournalMismatch {
+                details: "replayed frames do not reproduce the recorded digest".to_string(),
+            }
+            .into());
+        }
+
+        for entry in state.entries() {
+            let index = entry.block_index as usize;
+            if entry.symbol_count != self.params.total_symbols_per_block {
+                return Err(ResumeError::JournalMismatch {
+                    details: format!(
+                        "block {index} declares {} symbols, session has {}",
+                        entry.symbol_count, self.params.total_symbols_per_block
+                    ),
+                }
+                .into());
+            }
+            if entry.symbol_bitmap != self.held[index] {
+                return Err(ResumeError::JournalMismatch {
+                    details: format!("block {index} holds different symbols than recorded"),
+                }
+                .into());
+            }
+        }
+
+        Ok(())
     }
 
     /// Returns the session ID this decoder accepts frames for.

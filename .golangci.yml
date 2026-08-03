@@ -1,5 +1,10 @@
 # golangci-lint configuration for Dhow CLI
 # https://golangci-lint.run/
+#
+# Schema is v2. In v2 the per-linter settings live under `linters.settings` and
+# exclusions under `linters.exclusions`; the v1 top-level `linters-settings` and
+# `issues.exclude-rules` keys are rejected outright, which fails the run before
+# a single file is linted.
 
 version: "2"
 
@@ -14,28 +19,41 @@ linters:
     - gocritic
     - misspell
 
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-    check-blank: true
-  revive:
-    severity: warning
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-      - performance
+  settings:
+    errcheck:
+      # An unchecked type assertion panics on a mismatch, which turns a wrong
+      # type into a crash with no message. Always check them.
+      check-type-assertions: true
+      # check-blank stays off. This codebase writes `_ = f.Close()` where the
+      # error genuinely has nowhere to go, with a comment saying why; that is
+      # the deliberate form errcheck exists to encourage, and check-blank
+      # rejects it, leaving no way to express "considered and discarded".
+      check-blank: false
+    revive:
+      severity: warning
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
 
-run:
-  timeout: 5m
-  tests: true
+  exclusions:
+    rules:
+      # Test files repeat themselves by design: a table of near-identical
+      # adversarial cases reads better than a loop that hides what differs.
+      - path: _test\.go
+        linters:
+          - dupl
+          - gocritic
+          - gosec
+      # gocritic reads cgo's pseudo-package `C` and `unsafe` as the same import
+      # appearing twice. Both are required to bind the Rust core, and there is
+      # no source-level way to satisfy the check.
+      - path: internal/ffi/ffi\.go
+        linters:
+          - gocritic
+        text: dupImport
 
 issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - dupl
-        - gocritic
-        - gosec
   max-issues-per-linter: 0
   max-same-issues: 0

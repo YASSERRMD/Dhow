@@ -20,6 +20,12 @@
 // a later phase; this transport is what the loopback tests and the CI harness
 // use, and it keeps the codec and crypto path exercised end to end without
 // hardware.
+//
+// # Resuming
+//
+// recv -state <dir> keeps progress on disk so an interrupted capture is
+// continued rather than repeated. It is opt-in: without the flag, recv writes
+// nothing outside -out. See docs/RESUME.md.
 package cli
 
 import (
@@ -42,6 +48,7 @@ import (
 	"dhow/cli/internal/ffi"
 	"dhow/cli/internal/pack"
 	"dhow/cli/internal/render"
+	"dhow/cli/internal/resume"
 )
 
 // Exit codes. See the package comment; these are a stable contract.
@@ -397,8 +404,10 @@ type recvResult struct {
 	SessionID string `json:"session_id"`
 	Frames    int    `json:"frames_accepted"`
 	Rejected  int    `json:"frames_rejected"`
+	Resumed   int    `json:"frames_resumed"`
 	Files     int    `json:"files"`
 	OutDir    string `json:"out_dir"`
+	StateDir  string `json:"state_dir,omitempty"`
 }
 
 func runRecv(env Env, args []string) error {
@@ -406,9 +415,16 @@ func runRecv(env Env, args []string) error {
 	keyPath := fs.String("key", "operator.key", "operator key file")
 	in := fs.String("in", "frames", "directory holding captured frames")
 	outDir := fs.String("out", "received", "directory to extract into")
+	stateDir := fs.String("state", "", "directory to keep resumable progress in")
+	saveEvery := fs.Uint("save-every", 200, "accepted frames between saves of the resume state")
+	stopAfter := fs.Uint("stop-after", 0, "stop after accepting this many frames, or 0 for no limit")
+	keepState := fs.Bool("keep-state", false, "keep the resume state after the transfer completes")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
 	if err := fs.Parse(args); err != nil {
 		return &exitError{code: ExitUsage, err: err}
+	}
+	if *saveEvery == 0 {
+		return failf(ExitUsage, "-save-every must be at least 1")
 	}
 
 	record, err := readRecord(filepath.Join(*in, recordName))
@@ -442,8 +458,34 @@ func runRecv(env Env, args []string) error {
 	}
 	sort.Strings(names)
 
+	// Restore whatever a previous run got through, if the operator asked for
+	// resumable progress and there is any.
+	store, resumed, err := restoreProgress(env, *stateDir, sessionID, dec)
+	if err != nil {
+		return err
+	}
+	if store != nil {
+		defer func() { _ = store.Close() }()
+	}
+
+	// A stop is an ordinary end to a receiving session: the operator decides
+	// when to walk away, and what was captured must survive that decision.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	accepted, rejected := 0, 0
+	stopped := false
+
 	for _, name := range names {
+		if ctx.Err() != nil {
+			stopped = true
+			break
+		}
+		if *stopAfter > 0 && uint(accepted) >= *stopAfter {
+			stopped = true
+			break
+		}
+
 		frame, err := os.ReadFile(name)
 		if err != nil {
 			return failf(ExitInput, "reading %s: %w", name, err)
@@ -455,6 +497,26 @@ func runRecv(env Env, args []string) error {
 			continue
 		}
 		accepted++
+
+		// Journal first, then the index. The other order would produce an
+		// index describing a frame the journal does not hold, which is the one
+		// inconsistency a replay cannot recover from.
+		if store != nil {
+			if err := store.Append(frame); err != nil {
+				return failf(ExitInput, "recording progress: %w", err)
+			}
+			if uint(accepted)%*saveEvery == 0 {
+				if err := saveProgress(store, dec); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	if store != nil {
+		if err := saveProgress(store, dec); err != nil {
+			return err
+		}
 	}
 
 	complete, err := dec.IsComplete()
@@ -462,9 +524,17 @@ func runRecv(env Env, args []string) error {
 		return failf(ExitInternal, "checking completion: %w", err)
 	}
 	if !complete {
+		detail := "more frames are needed"
+		if stopped {
+			detail = "stopped before the end of the stream"
+		}
+		if store != nil {
+			detail += fmt.Sprintf("; progress saved in %s, rerun with -state %s to continue",
+				store.Dir(), store.Dir())
+		}
 		return failf(ExitIncomplete,
-			"transfer incomplete: %d frames accepted, %d rejected; more frames are needed",
-			accepted, rejected)
+			"transfer incomplete: %d frames accepted, %d rejected; %s",
+			resumed+accepted, rejected, detail)
 	}
 
 	payload, err := dec.Finish(key, sessionID, salt, nonce)
@@ -480,16 +550,118 @@ func runRecv(env Env, args []string) error {
 		return failf(ExitVerifyFailed, "extracting into %s: %w", *outDir, err)
 	}
 
+	// The state has done its job. Leaving it behind would be picked up by the
+	// next transfer pointed at the same directory and rejected as a foreign
+	// session, which is a confusing way to learn that a stale file exists.
+	if store != nil && !*keepState {
+		if err := store.Discard(); err != nil {
+			return failf(ExitInput, "clearing resume state: %w", err)
+		}
+	}
+
+	human := fmt.Sprintf("session   %s\naccepted  %d frames\nrejected  %d frames\nfiles     %d\nwritten   %s\n",
+		record.SessionID, accepted, rejected, len(entries), *outDir)
+	if resumed > 0 {
+		human = fmt.Sprintf("session   %s\nresumed   %d frames\naccepted  %d frames\nrejected  %d frames\nfiles     %d\nwritten   %s\n",
+			record.SessionID, resumed, accepted, rejected, len(entries), *outDir)
+	}
+
+	stateShown := ""
+	if store != nil {
+		stateShown = store.Dir()
+	}
 	return emit(env.Stdout, *asJSON,
 		recvResult{
 			SessionID: record.SessionID,
 			Frames:    accepted,
 			Rejected:  rejected,
+			Resumed:   resumed,
 			Files:     len(entries),
 			OutDir:    *outDir,
+			StateDir:  stateShown,
 		},
-		fmt.Sprintf("session   %s\naccepted  %d frames\nrejected  %d frames\nfiles     %d\nwritten   %s\n",
-			record.SessionID, accepted, rejected, len(entries), *outDir))
+		human)
+}
+
+// restoreProgress opens the state directory and replays whatever it holds.
+//
+// Returns the store, the number of frames replayed, and an error. A nil store
+// means the operator did not ask for resumable progress, which is not a
+// failure: it is the default.
+//
+// Every failure here is fail-closed. A state that cannot be trusted is never
+// partially applied, because a decoder holding some of a previous run's frames
+// and no record of which ones is worse than one holding none.
+func restoreProgress(env Env, dir string, sessionID [16]byte, dec *ffi.Decoder) (*resume.Store, int, error) {
+	if dir == "" {
+		return nil, 0, nil
+	}
+
+	store, err := resume.Open(dir)
+	if err != nil {
+		return nil, 0, failf(ExitInput, "opening state directory: %w", err)
+	}
+
+	state, err := store.State()
+	if errors.Is(err, resume.ErrNoState) {
+		// First run against this directory.
+		if err := store.Begin(0); err != nil {
+			return nil, 0, failf(ExitInput, "preparing the journal: %w", err)
+		}
+		return store, 0, nil
+	}
+	if err != nil {
+		return nil, 0, failf(ExitInput, "reading saved state: %w", err)
+	}
+
+	info, err := ffi.ReadResumeState(state)
+	if err != nil {
+		return nil, 0, failf(ExitInput,
+			"saved state in %s is unusable (%v); delete it to start this transfer over", dir, err)
+	}
+	if info.SessionID != sessionID {
+		return nil, 0, failf(ExitInput,
+			"saved state in %s belongs to session %s, not %s; point -state at the right directory",
+			dir, hex.EncodeToString(info.SessionID[:]), hex.EncodeToString(sessionID[:]))
+	}
+
+	replayed, err := store.Replay(info.JournalBytes, dec.Accept)
+	if err != nil {
+		return nil, 0, failf(ExitInput,
+			"replaying saved progress from %s: %w; delete the directory to start this transfer over",
+			dir, err)
+	}
+
+	// The replay is checked against what the state said it would produce.
+	// Every replayed frame was authenticated on the way in, so this is not
+	// what keeps forged symbols out; it is what stops a stale or swapped pair
+	// of files from passing as progress that was really made.
+	if err := dec.VerifyResume(state); err != nil {
+		return nil, 0, failf(ExitInput,
+			"saved progress in %s does not match its journal (%v); delete the directory to start this transfer over",
+			dir, err)
+	}
+
+	if err := store.Begin(info.JournalBytes); err != nil {
+		return nil, 0, failf(ExitInput, "preparing the journal: %w", err)
+	}
+
+	_, _ = fmt.Fprintf(env.Stderr, "resumed %d frames from %s\n", replayed, dir)
+	return store, replayed, nil
+}
+
+// saveProgress writes the decoder's progress alongside the journal it covers.
+func saveProgress(store *resume.Store, dec *ffi.Decoder) error {
+	// The length is read after the last append and handed to the decoder in
+	// the same breath, so the state describes exactly the journal on disk.
+	state, err := dec.ResumeState(store.Written())
+	if err != nil {
+		return failf(ExitInternal, "building resume state: %w", err)
+	}
+	if err := store.Save(state); err != nil {
+		return failf(ExitInput, "saving resume state: %w", err)
+	}
+	return nil
 }
 
 // --- verify ---

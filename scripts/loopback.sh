@@ -168,6 +168,70 @@ diff -r "$DATA" "$WORK/from-corrupt" >/dev/null \
     || fail "corrupted frames produced a different dataset"
 pass "corrupted frames were rejected without poisoning the decode"
 
+# --- Interruption and resume ---
+#
+# A capture that runs for an hour will be interrupted. The receiver keeps a
+# journal of the frames it accepted and an index over it, so a restart replays
+# what it had rather than starting from nothing. Killing the receiver twice
+# exercises a journal that is replayed, extended, and replayed again, which is
+# where an off-by-one in the covered length would show up.
+
+STATE="$WORK/state"
+RESUMED="$WORK/resumed"
+
+FIRST_STOP=$((FRAME_COUNT / 5))
+SECOND_STOP=$((FRAME_COUNT / 2))
+
+for STOP in "$FIRST_STOP" "$SECOND_STOP"; do
+    set +e
+    "$DHOW" recv -key "$WORK/operator.key" -in "$WORK/frames" -out "$RESUMED" \
+        -state "$STATE" -stop-after "$STOP" -save-every 50 >/dev/null 2>&1
+    STOP_EXIT=$?
+    set -e
+    [ "$STOP_EXIT" -eq 4 ] || fail "an interrupted receive exited ${STOP_EXIT}, expected 4"
+    [ -f "$STATE/journal.bin" ] || fail "an interrupted receive saved no journal"
+    [ -f "$STATE/resume.dhrs" ] || fail "an interrupted receive saved no resume state"
+done
+
+"$DHOW" recv -key "$WORK/operator.key" -in "$WORK/frames" -out "$RESUMED" \
+    -state "$STATE" >/dev/null 2>&1 || fail "a resumed transfer did not complete"
+diff -r "$DATA" "$RESUMED" >/dev/null || fail "a resumed transfer produced a different dataset"
+[ ! -f "$STATE/resume.dhrs" ] || fail "resume state survived a completed transfer"
+pass "resumed through two interruptions and round tripped byte for byte"
+
+# Tampering with either half of the state must stop the transfer rather than
+# quietly resume from whatever survived.
+
+TAMPER="$WORK/tamper-state"
+set +e
+"$DHOW" recv -key "$WORK/operator.key" -in "$WORK/frames" -out "$WORK/tampered" \
+    -state "$TAMPER" -stop-after "$FIRST_STOP" >/dev/null 2>&1
+set -e
+
+# Offset 40 is inside the index's journal digest: the field that would have to
+# be rewritten to make a doctored journal look like the expected one.
+printf '\xff' | dd of="$TAMPER/resume.dhrs" bs=1 seek=40 conv=notrunc status=none
+set +e
+"$DHOW" recv -key "$WORK/operator.key" -in "$WORK/frames" -out "$WORK/tampered" \
+    -state "$TAMPER" >/dev/null 2>&1
+TAMPER_EXIT=$?
+set -e
+[ "$TAMPER_EXIT" -eq 2 ] || fail "a tampered resume index exited ${TAMPER_EXIT}, expected 2"
+
+JOURNAL_TAMPER="$WORK/journal-state"
+set +e
+"$DHOW" recv -key "$WORK/operator.key" -in "$WORK/frames" -out "$WORK/tampered2" \
+    -state "$JOURNAL_TAMPER" -stop-after "$FIRST_STOP" >/dev/null 2>&1
+set -e
+printf '\xff' | dd of="$JOURNAL_TAMPER/journal.bin" bs=1 seek=60 conv=notrunc status=none
+set +e
+"$DHOW" recv -key "$WORK/operator.key" -in "$WORK/frames" -out "$WORK/tampered2" \
+    -state "$JOURNAL_TAMPER" >/dev/null 2>&1
+JOURNAL_EXIT=$?
+set -e
+[ "$JOURNAL_EXIT" -eq 2 ] || fail "a tampered journal exited ${JOURNAL_EXIT}, expected 2"
+pass "tampered resume state and journal both fail closed"
+
 # --- Fail-closed cases ---
 
 set +e

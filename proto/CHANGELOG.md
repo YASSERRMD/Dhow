@@ -1,6 +1,21 @@
 # Format Changelog
 
-> Version 1.0
+> Version 1.1
+
+## v1.1 - 2026-08-03
+
+### Changed
+
+- Resume file format bumped to v2. The 32-byte reserved field at offset 28 is
+  replaced by an 8-byte journal length and a 32-byte journal digest, and the
+  fixed header grows from 96 to 128 bytes. A v2 reader rejects a v1 file.
+
+### Notes
+
+- Only the resume file changed. Frame, session, and manifest formats are
+  untouched, so this is not an over-the-air change: a v1.0 sender and a v1.1
+  receiver interoperate. Resume files are local state and never cross the
+  optical channel.
 
 ## v1.0 - 2026-07-27
 
