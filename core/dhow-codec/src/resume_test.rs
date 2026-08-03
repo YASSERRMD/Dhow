@@ -399,3 +399,115 @@ proptest! {
         prop_assert!(ResumeFile::from_bytes(&bytes).is_err());
     }
 }
+
+// --- Golden vectors ---
+//
+// The vectors in proto/vectors.json are produced by scripts/gen_vectors.py, a
+// second implementation of the format written from the spec. Parsing them here
+// is what stops the two from drifting: a Rust-only round trip would agree with
+// itself no matter what the spec said.
+
+fn golden(name: &str) -> serde_json::Value {
+    let vectors_json = include_str!("../../../proto/vectors.json");
+    let vectors: serde_json::Value = serde_json::from_str(vectors_json).unwrap();
+    vectors["vectors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["name"] == name)
+        .unwrap_or_else(|| panic!("golden vector {name} is missing"))
+        .clone()
+}
+
+fn golden_bytes(vector: &serde_json::Value, field: &str) -> Vec<u8> {
+    hex::decode(vector["outputs"][field].as_str().unwrap()).unwrap()
+}
+
+#[test]
+fn test_golden_resume_header_parses() {
+    let vector = golden("resume_header_v2");
+    let bytes = golden_bytes(&vector, "header_hex");
+    assert_eq!(bytes.len(), RESUME_HEADER_SIZE);
+
+    let header = ResumeHeader::from_bytes(&bytes).unwrap();
+    let inputs = &vector["inputs"];
+
+    assert_eq!(header.version(), inputs["version"].as_u64().unwrap() as u8);
+    assert_eq!(
+        header.session_id().to_vec(),
+        hex::decode(inputs["session_id"].as_str().unwrap()).unwrap()
+    );
+    assert_eq!(
+        u64::from(header.block_count()),
+        inputs["block_count"].as_u64().unwrap()
+    );
+    assert_eq!(
+        header.journal_bytes(),
+        inputs["journal_bytes"].as_u64().unwrap()
+    );
+    assert_eq!(
+        header.journal_digest().to_vec(),
+        hex::decode(inputs["journal_digest"].as_str().unwrap()).unwrap()
+    );
+    assert_eq!(
+        u64::from(header.crc32c()),
+        vector["outputs"]["crc32c"].as_u64().unwrap()
+    );
+}
+
+#[test]
+fn test_golden_full_resume_parses_and_re_serializes_byte_for_byte() {
+    let vector = golden("full_resume_v2");
+    let bytes = golden_bytes(&vector, "resume_hex");
+
+    let file = ResumeFile::from_bytes(&bytes).unwrap();
+    assert_eq!(file.entries().len(), 4);
+    assert_eq!(
+        file.journal_bytes(),
+        vector["inputs"]["journal_bytes"].as_u64().unwrap()
+    );
+
+    for (index, expected) in vector["inputs"]["block_entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let entry = &file.entries()[index];
+        assert_eq!(u64::from(entry.block_index), expected["block_index"].as_u64().unwrap());
+        assert_eq!(
+            u64::from(entry.symbol_count),
+            expected["symbol_count"].as_u64().unwrap()
+        );
+        assert_eq!(
+            u64::from(entry.symbols_held),
+            expected["symbols_held"].as_u64().unwrap()
+        );
+        assert_eq!(
+            entry.symbol_bitmap,
+            hex::decode(expected["bitmap"].as_str().unwrap()).unwrap()
+        );
+    }
+
+    // Writing it back must reproduce the vector exactly, which checks the
+    // serializer against the same second implementation as the parser.
+    assert_eq!(file.to_vec(), bytes);
+}
+
+#[test]
+fn test_golden_block_entry_parses() {
+    let vector = golden("resume_block_entry_v2");
+    let bytes = golden_bytes(&vector, "entry_hex");
+
+    let (entry, consumed) = BlockEntry::from_bytes(&bytes).unwrap();
+    assert_eq!(consumed, bytes.len());
+    assert_eq!(
+        u64::from(entry.symbol_count),
+        vector["inputs"]["symbol_count"].as_u64().unwrap()
+    );
+    assert_eq!(
+        u64::from(entry.symbols_held),
+        vector["inputs"]["symbols_held"].as_u64().unwrap()
+    );
+    assert_eq!(entry.to_vec(), bytes);
+}
