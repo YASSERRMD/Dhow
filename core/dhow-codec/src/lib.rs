@@ -20,6 +20,9 @@ pub mod manifest;
 #[cfg(test)]
 mod manifest_test;
 pub mod pipeline;
+/// Property tests for the frame pipeline.
+#[cfg(test)]
+mod pipeline_property_test;
 #[cfg(test)]
 mod pipeline_test;
 pub mod qr;
