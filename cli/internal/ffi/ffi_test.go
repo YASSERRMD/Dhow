@@ -778,3 +778,115 @@ func TestBlake3SpansAChunkBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestHasherStreamsToTheSameDigestAsOneShot(t *testing.T) {
+	data := make([]byte, 5000)
+	for i := range data {
+		data[i] = byte(i % 251)
+	}
+	want, err := Blake3(data)
+	if err != nil {
+		t.Fatalf("Blake3: %v", err)
+	}
+
+	// Chunk sizes chosen so writes land on and off BLAKE3's 1024-byte chunk
+	// boundary: a hasher that mishandles a partial chunk agrees with the
+	// one-shot only when the splits happen to align.
+	for _, chunk := range []int{1, 7, 64, 1023, 1024, 1025, 4096, 5000} {
+		h, err := NewHasher()
+		if err != nil {
+			t.Fatalf("NewHasher: %v", err)
+		}
+		for off := 0; off < len(data); off += chunk {
+			end := min(off+chunk, len(data))
+			n, err := h.Write(data[off:end])
+			if err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+			if n != end-off {
+				t.Fatalf("Write returned %d, want %d", n, end-off)
+			}
+		}
+		got, err := h.Sum()
+		if err != nil {
+			t.Fatalf("Sum: %v", err)
+		}
+		h.Close()
+
+		if got != want {
+			t.Errorf("chunk %d: digest = %x, want %x", chunk, got, want)
+		}
+	}
+}
+
+func TestHasherOfNothingIsTheEmptyDigest(t *testing.T) {
+	h, err := NewHasher()
+	if err != nil {
+		t.Fatalf("NewHasher: %v", err)
+	}
+	defer h.Close()
+
+	got, err := h.Sum()
+	if err != nil {
+		t.Fatalf("Sum: %v", err)
+	}
+	if hex.EncodeToString(got[:]) != "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262" {
+		t.Errorf("empty digest = %x", got)
+	}
+}
+
+func TestHasherStaysUsableAfterSum(t *testing.T) {
+	// Sum is a snapshot, not a close: a caller hashing a stream may want the
+	// digest of a prefix and then keep going.
+	h, err := NewHasher()
+	if err != nil {
+		t.Fatalf("NewHasher: %v", err)
+	}
+	defer h.Close()
+
+	if _, err := h.Write([]byte("abc")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	prefix, err := h.Sum()
+	if err != nil {
+		t.Fatalf("Sum: %v", err)
+	}
+	if _, err := h.Write([]byte("def")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	full, err := h.Sum()
+	if err != nil {
+		t.Fatalf("Sum: %v", err)
+	}
+
+	wantPrefix, _ := Blake3([]byte("abc"))
+	wantFull, _ := Blake3([]byte("abcdef"))
+	if prefix != wantPrefix {
+		t.Errorf("prefix digest = %x, want %x", prefix, wantPrefix)
+	}
+	if full != wantFull {
+		t.Errorf("full digest = %x, want %x", full, wantFull)
+	}
+}
+
+func TestClosedHasherIsRefusedNotDereferenced(t *testing.T) {
+	h, err := NewHasher()
+	if err != nil {
+		t.Fatalf("NewHasher: %v", err)
+	}
+	h.Close()
+	h.Close() // idempotent
+
+	if _, err := h.Write([]byte("x")); err == nil {
+		t.Error("Write on a closed hasher returned no error")
+	}
+	if _, err := h.Sum(); err == nil {
+		t.Error("Sum on a closed hasher returned no error")
+	}
+
+	var nilHasher *Hasher
+	nilHasher.Close()
+	if _, err := nilHasher.Write([]byte("x")); err == nil {
+		t.Error("Write on a nil hasher returned no error")
+	}
+}
