@@ -101,11 +101,27 @@ fuzzer starting from random bytes will not reach this side of a heat death.
 
 | Target | What it parses | Why it is hostile input |
 |--------|----------------|-------------------------|
-| `frame_decode` | `Frame::from_bytes` | Every frame comes off a camera pointed at a screen anyone can stand in front of. |
-| `manifest_verify` | `Manifest::from_bytes`, then signature verification | The manifest is the receiver's first sight of a transfer and decides what it extracts. |
-| `resume_load` | `ResumeFile::from_bytes` | Read from local storage, which a compromised receiver controls. |
-| `session_header` | `SessionHeader::from_bytes` | Unsigned framing that configures the decoder. |
+| `frame_decode` | `FrameHeader::from_bytes`, and `Frame::from_bytes` both unaltered and with the MAC and CRC repaired | Every frame comes off a camera pointed at a screen anyone can stand in front of. |
+| `session_header` | `SessionHeader::from_bytes` | Unsigned framing that configures the decoder before anything is verified. |
 | `manifest_entry` | `FileEntry::from_bytes` | The path-traversal surface, reached with an attacker-chosen length prefix. |
+| `manifest_verify` | `Manifest::from_bytes`, then signature verification and policy | The receiver's first sight of a transfer; it decides what is extracted, and now also the salt, nonce, and coding parameters. |
+| `resume_load` | `ResumeFile::from_bytes` | Read from local storage, which a compromised receiver controls. |
+
+### Why `frame_decode` repairs the MAC
+
+A fuzzer will not produce eight bytes of keyed MAC by mutation. Left alone,
+every input dies at the first check and the code that reads a declared length
+and slices a payload out of a buffer is never reached — which is the code worth
+fuzzing. The target therefore parses the input twice: once unaltered, which is
+the rejection path a real attacker without the key gets, and once with the MAC
+and CRC recomputed so the frame authenticates.
+
+Repairing a checksum to get past a gate is standard practice and it is sound
+here: the repaired fields are exactly the ones a sender computes, and everything
+the fuzzer still controls — the indices, the declared length, the payload, the
+version and type bytes — is what a *legitimate but malicious* sender controls.
+That is the threat model on this side of the MAC. Adding the repair took the
+target from 79 to 95 covered edges.
 
 Each target asserts the invariants the parser promises, not merely that it did
 not crash:
