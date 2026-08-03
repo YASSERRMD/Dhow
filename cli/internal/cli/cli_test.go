@@ -1311,3 +1311,68 @@ func TestNoWrongKeyWarningOnAGoodTransfer(t *testing.T) {
 		t.Errorf("a healthy transfer warned about the key: %s", errOut)
 	}
 }
+
+func TestRecvRefusesAnExistingOutputDirectory(t *testing.T) {
+	// Extracting into a directory that already holds something would blend two
+	// datasets, and every file that happened to match would still verify.
+	key, frameDir, _ := sendFixture(t, "2")
+	outDir := filepath.Join(t.TempDir(), "received")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir)
+	if code != ExitInput {
+		t.Fatalf("recv into an existing directory exited %d, want %d: %s", code, ExitInput, errOut)
+	}
+	if !strings.Contains(errOut, "already exists") {
+		t.Errorf("the error does not say why: %s", errOut)
+	}
+}
+
+func TestFailedExtractionLeavesNothingBehind(t *testing.T) {
+	// A transfer that decodes and then fails to unpack must leave nothing. An
+	// operator rerunning a script and finding a populated directory has been
+	// handed something that looks like output and is not.
+	key, frameDir, _ := sendFixture(t, "2")
+	work := t.TempDir()
+
+	// A path whose parent is a regular file, so the staging directory cannot
+	// be created and the failure happens during extraction.
+	blocker := filepath.Join(work, "blocker")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	outDir := filepath.Join(blocker, "received")
+
+	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir)
+	if code == ExitOK {
+		t.Fatalf("recv succeeded into an impossible path: %s", errOut)
+	}
+	if info, err := os.Stat(outDir); err == nil && info.IsDir() {
+		t.Error("a failed extraction left an output directory behind")
+	}
+}
+
+func TestSuccessfulExtractionLeavesNoStagingDirectory(t *testing.T) {
+	key, frameDir, dataDir := sendFixture(t, "2")
+	work := t.TempDir()
+	outDir := filepath.Join(work, "received")
+
+	if code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir); code != ExitOK {
+		t.Fatalf("recv exited %d: %s", code, errOut)
+	}
+	sameTree(t, dataDir, outDir)
+
+	entries, err := os.ReadDir(work)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "received" {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("recv left %v beside its output, want only \"received\"", names)
+	}
+}
