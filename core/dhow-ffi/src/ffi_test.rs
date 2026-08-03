@@ -834,7 +834,6 @@ fn test_abi_version_matches_the_constant() {
     assert_eq!(dhow_abi_version(), crate::DHOW_ABI_VERSION);
     // The Go bindings assert the number itself, which is where a mismatch
     // between the two sides actually matters.
-    assert!(crate::DHOW_ABI_VERSION >= 3);
 }
 
 // --- Digests ---
