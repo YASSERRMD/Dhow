@@ -15,7 +15,7 @@
 
 use crate::error::{DhowStatus, clear_last_error, fail};
 use crate::guard::{guard, guard_ptr};
-use dhow_codec::blake3::blake3_digest;
+use dhow_codec::blake3::{Blake3Hasher, blake3_digest};
 use dhow_codec::pipeline::{Pipeline, PipelineDecoder};
 use dhow_codec::qr::{
     Ecc, QrCodeEncoder, capacity as qr_capacity, max_symbol_size as qr_max_symbol_size,
@@ -832,6 +832,104 @@ pub unsafe extern "C" fn dhow_blake3(data: *const u8, len: usize, out: *mut u8) 
         unsafe { std::ptr::copy_nonoverlapping(digest.as_ptr(), out, 32) };
         DhowStatus::Ok
     })
+}
+
+/// An opaque streaming BLAKE3 hasher.
+pub struct DhowHasher {
+    inner: Blake3Hasher,
+}
+
+/// Creates a streaming BLAKE3 hasher.
+///
+/// The one-shot [`dhow_blake3`] needs the whole input in memory at once. A
+/// caller hashing a file it is streaming somewhere else - which is what
+/// packing a dataset does - would otherwise have to buffer the file only to
+/// hash it, turning a bounded working set into one that grows with the largest
+/// file in the dataset.
+///
+/// Returns null on failure.
+#[unsafe(no_mangle)]
+pub extern "C" fn dhow_hasher_new() -> *mut DhowHasher {
+    guard_ptr(|| {
+        clear_last_error();
+        Box::into_raw(Box::new(DhowHasher {
+            inner: Blake3Hasher::new(),
+        }))
+    })
+}
+
+/// Adds bytes to a hasher.
+///
+/// # Safety
+///
+/// `hasher` must be a live handle and `data` must point to `len` readable
+/// bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_hasher_update(
+    hasher: *mut DhowHasher,
+    data: *const u8,
+    len: usize,
+) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        if hasher.is_null() {
+            return fail(DhowStatus::NullArgument, "hasher handle was null");
+        }
+        // SAFETY: forwarded from this function's own contract.
+        let Some(data) = (unsafe { slice_from(data, len) }) else {
+            return fail(DhowStatus::NullArgument, "data pointer was null");
+        };
+        // SAFETY: `hasher` is non-null and the caller guarantees it is live
+        // and not aliased by another thread.
+        let hasher = unsafe { &mut *hasher };
+
+        hasher.inner.update(data);
+        DhowStatus::Ok
+    })
+}
+
+/// Writes the digest of everything added so far.
+///
+/// The hasher is left usable, so a caller may keep adding and finish again.
+///
+/// # Safety
+///
+/// `hasher` must be a live handle and `out` must point to 32 writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_hasher_finish(hasher: *const DhowHasher, out: *mut u8) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        if hasher.is_null() {
+            return fail(DhowStatus::NullArgument, "hasher handle was null");
+        }
+        if out.is_null() {
+            return fail(DhowStatus::NullArgument, "output pointer was null");
+        }
+        // SAFETY: `hasher` is non-null and the caller guarantees it is live.
+        let hasher = unsafe { &*hasher };
+
+        let digest = hasher.inner.clone().finalize();
+        // SAFETY: the caller guarantees 32 writable bytes at `out`, and the
+        // source is a local array that cannot overlap it.
+        unsafe { std::ptr::copy_nonoverlapping(digest.as_ptr(), out, 32) };
+        DhowStatus::Ok
+    })
+}
+
+/// Releases a hasher handle. Passing null is a no-op.
+///
+/// # Safety
+///
+/// `hasher` must be null or a handle from this library that has not been
+/// freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_hasher_free(hasher: *mut DhowHasher) {
+    if hasher.is_null() {
+        return;
+    }
+    // SAFETY: the caller guarantees `hasher` came from `Box::into_raw` here
+    // and has not already been freed.
+    drop(unsafe { Box::from_raw(hasher) });
 }
 
 // --- QR encoding ---
