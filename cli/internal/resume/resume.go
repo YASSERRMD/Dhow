@@ -297,6 +297,29 @@ func (s *Store) Close() error {
 	return nil
 }
 
+// Discard removes the journal and the index.
+//
+// Called once a transfer has completed and verified, when the state has done
+// its job. Left behind, it would be picked up by the next transfer pointed at
+// the same directory and rejected as belonging to a foreign session, which is
+// a confusing way to learn that a stale file exists.
+//
+// Only the two files this package writes are removed; the directory itself and
+// anything an operator put in it are left alone.
+func (s *Store) Discard() error {
+	if err := s.Close(); err != nil {
+		return err
+	}
+	for _, name := range []string{JournalName, StateName} {
+		if err := os.Remove(filepath.Join(s.dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("removing %s: %w", filepath.Join(s.dir, name), err)
+		}
+	}
+	s.state = nil
+	s.written = 0
+	return nil
+}
+
 // Dir returns the state directory's path.
 func (s *Store) Dir() string {
 	return s.dir
