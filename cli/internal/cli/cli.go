@@ -628,6 +628,11 @@ func runRecv(env Env, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// How many consecutive rejections with nothing accepted before saying so.
+	// Low enough to be noticed early, high enough not to fire on the ordinary
+	// run of unreadable frames at the start of a capture.
+	const captureNoiseWarning = 50
+
 	accepted, rejected := 0, 0
 	blocksDone := -1
 	stopped := false
@@ -643,6 +648,14 @@ func runRecv(env Env, args []string) error {
 		if *stopAfter > 0 && uint(accepted) >= *stopAfter {
 			stopped = true
 			break
+		}
+		if len(names) > 0 && level >= loud && accepted == 0 && rejected == captureNoiseWarning {
+			// Frames are arriving and none of them authenticate. That is the
+			// wrong key, not a bad camera angle, and an operator who does not
+			// hear it now will wait out the whole stream to learn it.
+			level.say(env.Stderr, loud,
+				"warning: %d frames read and none accepted; this is what a wrong key looks like\n",
+				rejected)
 		}
 
 		frame, err := os.ReadFile(name)
