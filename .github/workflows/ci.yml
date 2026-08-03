@@ -49,18 +49,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: rustsec/audit-ci-action@v2.0.0
-        with:
-          sccache: false
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit
+        working-directory: core
 
   cargo-deny:
     name: Cargo Deny
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo install cargo-deny
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-deny --locked
       - run: cargo deny check
+        working-directory: core
 
   go-vet:
     name: Go Vet
