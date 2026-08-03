@@ -935,14 +935,15 @@ func TestVerifyReportsAFileNobodySent(t *testing.T) {
 }
 
 func TestVerifyReportsALostExecutableBit(t *testing.T) {
-	key, frameDir, dataDir := sendFixture(t, "2")
+	// sendFixture's frames predate the script, so they are discarded and the
+	// dataset is sent again once the inventory can know it is executable.
+	key, _, dataDir := sendFixture(t, "2")
 	script := filepath.Join(dataDir, "run.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Re-send so the inventory knows the script is executable.
-	frameDir = filepath.Join(t.TempDir(), "frames")
+	frameDir := filepath.Join(t.TempDir(), "frames")
 	code, _, errOut := run("send", "-key", key, "-in", dataDir, "-out", frameDir,
 		"-blocks", "2", "-symbol-size", "256")
 	if code != ExitOK {
