@@ -1,5 +1,19 @@
 # Phase Log
 
+## Phase 32 - Security review
+
+**Objective:** `docs/THREAT-MODEL.md` has carried a requirements checklist since
+Phase 2 whose Status column has been wrong for most of the project's life -
+"Planned (Phase 15)" against work that shipped in Phase 15, and so on. Phase 28
+added a note saying so rather than quietly correcting rows nobody had audited.
+This phase does the audit: every claim in the threat model is traced to a named
+test or gate that enforces it, or is recorded as unenforced. `cargo geiger`
+confirms where `unsafe` actually lives. The document becomes v1.
+
+**Gates:** a traceability table with no gaps - meaning no row without either an
+enforcing test named by function, or an explicit statement that nothing enforces
+it; `cargo geiger` output recorded; every "Planned" resolved to what is true.
+
 ## Phase 31 - Benchmarks and a memory budget
 
 **Objective:** nothing in this tree measures how fast anything is or how much
