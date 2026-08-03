@@ -827,8 +827,14 @@ fn test_resume_state_read_rejects_a_truncated_file() {
 }
 
 #[test]
-fn test_abi_version_is_two() {
-    assert_eq!(dhow_abi_version(), 2);
+fn test_abi_version_matches_the_constant() {
+    // Pinned to the constant rather than to a literal. A literal has to be
+    // edited in step with every bump, which makes the test a chore that gets
+    // updated reflexively rather than a check anyone reads.
+    assert_eq!(dhow_abi_version(), crate::DHOW_ABI_VERSION);
+    // The Go bindings assert the number itself, which is where a mismatch
+    // between the two sides actually matters.
+    assert!(crate::DHOW_ABI_VERSION >= 3);
 }
 
 // --- Digests ---
