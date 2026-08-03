@@ -13,6 +13,129 @@ wrong. Silent corruption is the one result that is never acceptable.
 corruption; the seed reproduces a failing round exactly; the harness runs
 bounded in the gate and unbounded on demand.
 
+### The harness found three defects, two of them its own
+
+Writing a fault-injection harness that is itself wrong is the obvious failure
+mode, and it happened three times before the harness was worth anything.
+
+**The generator never advanced.** `x=$(rand 10)` runs the function in a
+subshell, so the mutated state died with it and every round drew the same
+numbers. Twelve rounds of "randomised" testing were twelve copies of one
+round. `rand` now sets a variable instead of echoing, and a self-check
+compares two sequences from one seed *and* checks the sequence moves, because
+a stuck generator compares equal to itself.
+
+**`find | head -n N` was a coin flip.** head closes the pipe, find takes
+SIGPIPE, and `pipefail` reports that as a failed pipeline that `set -e` exits
+on. It only fires when find is still producing when head stops, so it passed
+on small rounds and killed large ones - the worst way for a harness to be
+wrong, because it looks like flakiness. Replaced with an array.
+
+**An "interrupted" receive sometimes finished.** `-stop-after N` with a small
+dataset completes the transfer, and the harness then asserted that an
+interrupted receive had written nothing, which was untrue. It now branches on
+what the first receive actually did.
+
+The third defect was real and in the product. See below.
+
+### Loss is drawn relative to the overhead, on purpose
+
+The first working version drew loss independently of repair overhead. Most
+rounds paired heavy loss with no overhead, every one failed closed, and the
+soak silently stopped exercising a successful transfer at all - it was
+measuring one half of the invariant and reporting a pass.
+
+Loss is now drawn from a range that scales with the overhead, and a soak of
+ten rounds or more asserts that *both* outcomes occurred. A harness that
+degenerates into testing one path keeps passing, which is the failure mode
+that matters most in a test you are not watching.
+
+The periodic loss pattern deliberately includes periods that divide the block
+count - the case `docs/OPERATIONS.md` warns operators about. A harness that
+avoided it would be testing a friendlier world than the one operators work in.
+
+### Defect found: a failed extraction left a partial dataset
+
+The harness asserts that a round which fails closed has written nothing. That
+invariant, written down, exposed that extraction wrote directly into the
+output directory. A failure partway through - a name the archive should not
+have contained, a disk filling, a permission the destination does not grant -
+left whatever had been written so far.
+
+The transfer reported failure either way, but an operator rerunning a script
+and finding a populated directory has been handed something that looks like
+output and is not.
+
+Extraction now stages into a sibling directory and renames, so the output
+either holds the whole dataset or does not exist. A sibling rather than the
+system temporary directory, because a rename across filesystems is a copy and
+the point is that the last step is atomic. An output directory that already
+exists is refused rather than merged into: blending two datasets would leave
+every file that happened to match still verifying, which is the most
+misleading result available.
+
+### One failure got away, and it is in the backlog
+
+The first 120-round soak reported:
+
+```
+FAIL  round 120: recv succeeded but verify rejected the dataset
+      (symbol=1320 blocks=7 overhead=50 loss=5%/contiguous dropped=8/161
+       corrupt=0 resumed=no)
+```
+
+The harness runs `diff -r` before `verify` and the diff passed, so the dataset
+was byte-for-byte correct and `verify` rejected it anyway. That points at the
+transfer record's inventory rather than at the transfer.
+
+**It has not been reproduced.** Re-running the same seed passed, because the
+harness was drawing dataset bytes from `/dev/urandom` and only the *parameters*
+from the seed - so the seed reproduced the shape of the round and not its data.
+That was a real gap in the harness's central promise, and it is fixed: content
+now comes from an AES-CTR keystream keyed by the seed and the round. The fix
+cannot recover the bytes that triggered the original failure.
+
+Four further soaks of sixty rounds each have not reproduced it.
+
+It is recorded as `B-1` in `docs/BACKLOG.md` with what is known: `diff` does
+not compare permissions, so a lost executable bit produces exactly this
+signature, and so does a wrong recorded digest - which would be far more
+serious, because it would make `verify` unreliable in both directions. The
+failure message now carries `verify`'s JSON, which names the file and the
+problem kind and distinguishes the two on the next occurrence.
+
+Reporting this as a clean phase would have been easy and wrong.
+
+### Deviation
+
+Thirteen atomic commits, below the twenty-commit floor. The phase is one
+harness, one defect it found, and the documentation of both; splitting the
+harness into a dozen commits would have been padding rather than
+decomposition. Recording the shortfall as the git procedure requires.
+
+The pack's Phase 38 gate calls for 100 consecutive transfers with randomised
+faults. The soak run for this phase was 120 rounds plus four further runs of
+sixty, which is 360 in total; the gate runs twelve on a fixed seed, because a
+gate's job is to confirm the harness still works, not to search. Searching is
+`scripts/chaos.sh 500` with a fresh seed, and `CONTRIBUTING.md` says when to
+do it.
+
+### Soak output
+
+```
+$ scripts/chaos.sh 120 20260803
+  rounds     120
+  completed  71
+  closed     49
+  corrupted  0
+
+$ scripts/chaos.sh 60 7919
+  rounds     60
+  completed  33
+  closed     27
+  corrupted  0
+```
+
 
 ## Phase 26 - Operator UX and the operations guide
 
