@@ -50,23 +50,32 @@
       }
     },
     {
-      "name": "manifest_header_v1",
-      "description": "Golden vector for manifest header v1",
+      "name": "manifest_header_v2",
+      "description": "Golden vector for manifest header v2",
       "inputs": {
         "magic": "DHMF",
-        "version": 1,
+        "version": 2,
         "reserved": 0,
         "session_id": "000102030405060708090a0b0c0d0e0f",
         "file_count": 2,
         "total_size": 8192,
         "payload_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "reserved2": "0000000000000000000000000000000000000000000000000000000000000000",
+        "salt": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "nonce": "808182838485868788898a8b8c8d8e8f9091929394959697",
+        "payload_size": 65536,
+        "block_count": 4,
+        "symbol_size": 256,
+        "source_symbols_per_block": 64,
+        "total_symbols_per_block": 96,
+        "raptorq_z": 1,
+        "raptorq_n": 1,
+        "raptorq_psi": 1,
         "signature": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
       },
       "outputs": {
-        "header_hex": "44484d4601000000000102030405060708090a0b0c0d0e0f020000000020000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000000000000000000000000000000000000000000000000000000000004011a55dbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "header_size": 168,
-        "crc32c": 1571098944
+        "header_hex": "44484d4602000000000102030405060708090a0b0c0d0e0f020000000020000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f808182838485868788898a8b8c8d8e8f9091929394959697000001000000000004000000000100004000000060000000010000000100000001000000bb4ebe51bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "header_size": 228,
+        "crc32c": 1371426491
       }
     },
     {
@@ -90,17 +99,19 @@
       }
     },
     {
-      "name": "manifest_file_entry_v1",
-      "description": "Golden vector for manifest file entry v1",
+      "name": "manifest_file_entry_v2",
+      "description": "Golden vector for manifest file entry v2",
       "inputs": {
         "name": "test/file.txt",
         "name_length": 13,
         "file_size": 256,
-        "file_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "file_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "flags": 1,
+        "executable": true
       },
       "outputs": {
-        "entry_hex": "0d00746573742f66696c652e7478740001000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "entry_size": 55
+        "entry_hex": "0d00746573742f66696c652e7478740001000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa01",
+        "entry_size": 56
       }
     },
     {
@@ -118,33 +129,37 @@
       }
     },
     {
-      "name": "full_manifest_v1",
-      "description": "Golden vector for full manifest with file entries v1",
+      "name": "full_manifest_v2",
+      "description": "Golden vector for full manifest with file entries v2",
       "inputs": {
         "magic": "DHMF",
-        "version": 1,
+        "version": 2,
         "session_id": "000102030405060708090a0b0c0d0e0f",
         "file_count": 2,
         "total_size": 8192,
         "payload_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "salt": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "nonce": "808182838485868788898a8b8c8d8e8f9091929394959697",
         "signature": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "file_entries": [
           {
             "name": "file1.txt",
             "size": 4096,
-            "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "executable": false
           },
           {
             "name": "file2.txt",
             "size": 4096,
-            "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "executable": true
           }
         ]
       },
       "outputs": {
-        "manifest_hex": "44484d4601000000000102030405060708090a0b0c0d0e0f020000000020000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000000000000000000000000000000000000000000000000000000000004011a55dbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb090066696c65312e7478740010000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa090066696c65322e7478740010000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "manifest_size": 270,
-        "crc32c": 1571098944
+        "manifest_hex": "44484d4602000000000102030405060708090a0b0c0d0e0f020000000020000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f808182838485868788898a8b8c8d8e8f9091929394959697000001000000000004000000000100004000000060000000010000000100000001000000bb4ebe51bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb090066696c65312e7478740010000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00090066696c65322e7478740010000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa01",
+        "manifest_size": 332,
+        "crc32c": 1371426491
       }
     },
     {

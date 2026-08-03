@@ -32,9 +32,9 @@ def check_vector_sizes(data):
     expected_sizes = {
         "frame_header_v1": 46,
         "session_header_v1": 126,
-        "manifest_header_v1": 168,
+        "manifest_header_v2": 228,
         "resume_header_v2": 128,
-        "manifest_file_entry_v1": 55,
+        "manifest_file_entry_v2": 56,
         "resume_block_entry_v2": 15,
     }
 
@@ -80,10 +80,18 @@ def check_field_offsets():
     if sum(session_fields) != 126:
         errors.append(f"  session_header: field offsets sum to {sum(session_fields)}, expected 126")
 
-    # Manifest header: 4 + 1 + 3 + 16 + 4 + 8 + 32 + 32 + 4 + 64 = 168
-    manifest_fields = [4, 1, 3, 16, 4, 8, 32, 32, 4, 64]
-    if sum(manifest_fields) != 168:
-        errors.append(f"  manifest_header: field offsets sum to {sum(manifest_fields)}, expected 168")
+    # Manifest header v2: magic, version, reserved, session id, file count,
+    # total size, payload digest, salt, nonce, payload size, block count,
+    # symbol size, K, total symbols, RaptorQ Z/N/PSI, reserved, CRC, signature.
+    manifest_fields = [4, 1, 3, 16, 4, 8, 32, 32, 24, 8, 4, 4, 4, 4, 4, 4, 2, 2, 4, 64]
+    if sum(manifest_fields) != 228:
+        errors.append(f"  manifest_header: field offsets sum to {sum(manifest_fields)}, expected 228")
+
+    # Manifest file entry v2: name length, name, size, digest, flags. The name
+    # in the golden vector is 13 bytes.
+    entry_fields = [2, 13, 8, 32, 1]
+    if sum(entry_fields) != 56:
+        errors.append(f"  manifest_file_entry: field offsets sum to {sum(entry_fields)}, expected 56")
 
     # Resume header v2: 4 + 1 + 3 + 16 + 4 + 8 + 32 + 24 + 4 + 32 = 128
     resume_fields = [4, 1, 3, 16, 4, 8, 32, 24, 4, 32]
