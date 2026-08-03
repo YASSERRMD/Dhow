@@ -1274,3 +1274,40 @@ func TestKeyErrorsNameTheirFix(t *testing.T) {
 		t.Errorf("the permissive-key error does not warn that the key may have been read: %s", errOut)
 	}
 }
+
+func TestVerboseWarnsEarlyWhenNothingAuthenticates(t *testing.T) {
+	// The wrong key looks exactly like a bad camera angle until the stream
+	// ends, which on a real capture is hours. Saying so at fifty rejections
+	// turns a wasted afternoon into a wasted minute.
+	_, frameDir, _ := sendFixture(t, "2")
+	work := t.TempDir()
+
+	other := filepath.Join(work, "other.key")
+	if code, _, errOut := run("keygen", "-out", other); code != ExitOK {
+		t.Fatalf("keygen exited %d: %s", code, errOut)
+	}
+
+	code, _, errOut := run("recv", "-key", other, "-in", frameDir,
+		"-out", filepath.Join(work, "received"), "-verbose")
+	if code != ExitIncomplete {
+		t.Fatalf("recv with the wrong key exited %d, want %d", code, ExitIncomplete)
+	}
+	if !strings.Contains(errOut, "wrong key") {
+		t.Errorf("-verbose did not name the wrong key as the likely cause: %s", errOut)
+	}
+}
+
+func TestNoWrongKeyWarningOnAGoodTransfer(t *testing.T) {
+	// A warning that fires on a healthy run is noise, and noise gets ignored
+	// on the run where it matters.
+	key, frameDir, _ := sendFixture(t, "2")
+
+	code, _, errOut := run("recv", "-key", key, "-in", frameDir,
+		"-out", filepath.Join(t.TempDir(), "received"), "-verbose")
+	if code != ExitOK {
+		t.Fatalf("recv exited %d: %s", code, errOut)
+	}
+	if strings.Contains(errOut, "wrong key") {
+		t.Errorf("a healthy transfer warned about the key: %s", errOut)
+	}
+}
