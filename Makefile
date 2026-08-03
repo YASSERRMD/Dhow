@@ -1,6 +1,6 @@
 # Dhow Makefile - convenience targets
 
-.PHONY: build test lint gate clean audit deny govulncheck fmt clippy spec-check vectors fuzz
+.PHONY: build test lint gate clean audit deny govulncheck fmt clippy spec-check vectors fuzz bench rss
 
 build:
 	cd core && cargo build
@@ -43,3 +43,10 @@ vectors:
 
 fuzz:
 	scripts/fuzz.sh 60
+
+bench:
+	cd core && cargo bench --bench data_path
+	cd cli && go test ./internal/pack/ -run '^$$' -bench . -benchmem
+
+rss:
+	scripts/rss.sh
