@@ -549,3 +549,184 @@ fn test_interleaving_preserves_every_frame() {
         assert!(*count > 0, "block {block} produced no frames");
     }
 }
+
+// --- Held-symbol record and journal digest ---
+
+/// Reads bit `index` of a bitmap laid out LSB-first.
+fn bit_set(bitmap: &[u8], index: u32) -> bool {
+    bitmap[index as usize / 8] & (1u8 << (index % 8)) != 0
+}
+
+/// Counts the set bits in a bitmap.
+fn popcount(bitmap: &[u8]) -> u32 {
+    bitmap.iter().map(|b| b.count_ones()).sum()
+}
+
+#[test]
+fn test_held_bitmap_names_the_symbols_that_arrived() {
+    let payload = payload_of(2048);
+    let params = params_for(&payload, 2, 6);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode(&payload)
+        .unwrap();
+
+    // Feed every third frame so the bitmap has a shape worth checking rather
+    // than being uniformly full.
+    let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+    let mut expected: Vec<Vec<u32>> = vec![Vec::new(); params.block_count as usize];
+    for frame in frames.iter().step_by(3) {
+        let header = frame.frame.header();
+        decoder.accept(&frame.frame.to_vec()).unwrap();
+        expected[header.block_index() as usize].push(header.symbol_index());
+    }
+
+    for block in 0..params.block_count {
+        let bitmap = decoder.symbol_bitmap(block).expect("block in range");
+        let want = &expected[block as usize];
+
+        assert_eq!(
+            decoder.symbols_held(block),
+            Some(want.len() as u32),
+            "block {block} held count"
+        );
+        assert_eq!(popcount(bitmap), want.len() as u32, "block {block} bit count");
+
+        for symbol in 0..params.total_symbols_per_block {
+            assert_eq!(
+                bit_set(bitmap, symbol),
+                want.contains(&symbol),
+                "block {block} symbol {symbol}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_held_count_ignores_a_repeated_symbol() {
+    let payload = payload_of(512);
+    let params = params_for(&payload, 1, 4);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+
+    let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+    decoder.accept(&frames[0]).unwrap();
+    let after_first = decoder.symbols_held(0).unwrap();
+
+    // A camera reads the same frame on consecutive passes all the time. That
+    // must not inflate the record of what the receiver actually holds.
+    for _ in 0..5 {
+        decoder.accept(&frames[0]).unwrap();
+    }
+    assert_eq!(decoder.symbols_held(0), Some(after_first));
+    assert_eq!(popcount(decoder.symbol_bitmap(0).unwrap()), after_first);
+}
+
+#[test]
+fn test_bitmap_is_empty_before_any_frame_and_out_of_range_is_none() {
+    let payload = payload_of(256);
+    let params = params_for(&payload, 2, 4);
+    let decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+
+    for block in 0..params.block_count {
+        assert_eq!(decoder.symbols_held(block), Some(0));
+        assert_eq!(popcount(decoder.symbol_bitmap(block).unwrap()), 0);
+    }
+    assert_eq!(decoder.block_count(), params.block_count);
+    assert_eq!(decoder.symbol_bitmap(params.block_count), None);
+    assert_eq!(decoder.symbols_held(params.block_count), None);
+}
+
+#[test]
+fn test_rejected_frame_leaves_no_trace_in_the_record() {
+    let payload = payload_of(512);
+    let params = params_for(&payload, 1, 4);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+
+    let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+    decoder.accept(&frames[0]).unwrap();
+    let held = decoder.symbols_held(0).unwrap();
+    let digest = decoder.journal_digest();
+
+    // A frame from another session, a frame with a broken MAC, and a truncated
+    // frame are the three ways capture noise reaches the decoder. None of them
+    // may enter the record, or a replay would be asked to reproduce a frame
+    // the receiver never wrote down.
+    let foreign = Pipeline::new([0x99; 16], params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+    assert!(decoder.accept(&foreign[0]).is_err());
+
+    let mut tampered = frames[1].clone();
+    let last = tampered.len() - 1;
+    tampered[last] ^= 0xFF;
+    assert!(decoder.accept(&tampered).is_err());
+
+    assert!(decoder.accept(&frames[1][..FRAME_HEADER_SIZE - 1]).is_err());
+
+    assert_eq!(decoder.symbols_held(0), Some(held));
+    assert_eq!(decoder.journal_digest(), digest);
+}
+
+#[test]
+fn test_journal_digest_reproduces_on_replay_and_notices_any_change() {
+    let payload = payload_of(4096);
+    let params = params_for(&payload, 3, 6);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+
+    let taken: Vec<Vec<u8>> = frames.iter().take(20).cloned().collect();
+
+    let digest_of = |stream: &[Vec<u8>]| {
+        let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+        for frame in stream {
+            decoder.accept(frame).unwrap();
+        }
+        decoder.journal_digest()
+    };
+
+    let original = digest_of(&taken);
+
+    // Replaying the same frames in the same order is the whole point: this is
+    // what a restarted receiver does.
+    assert_eq!(digest_of(&taken), original);
+
+    // Every way a journal can be doctored has to move the digest.
+    let mut reordered = taken.clone();
+    reordered.swap(0, 1);
+    assert_ne!(digest_of(&reordered), original, "reordering went unnoticed");
+
+    assert_ne!(
+        digest_of(&taken[..taken.len() - 1]),
+        original,
+        "truncation went unnoticed"
+    );
+
+    let mut extended = taken.clone();
+    extended.push(frames[20].clone());
+    assert_ne!(digest_of(&extended), original, "insertion went unnoticed");
+
+    let mut substituted = taken.clone();
+    substituted[5] = frames[25].clone();
+    assert_ne!(
+        digest_of(&substituted),
+        original,
+        "substitution went unnoticed"
+    );
+}
+
+#[test]
+fn test_journal_digest_of_an_untouched_decoder_is_the_empty_digest() {
+    let payload = payload_of(256);
+    let params = params_for(&payload, 1, 4);
+    let decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+    assert_eq!(decoder.journal_digest(), blake3_digest(b""));
+}
