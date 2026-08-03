@@ -171,3 +171,33 @@ jobs:
       - run: python3 scripts/gen_vectors.py
       - run: python3 scripts/check_spec.py
       - run: python3 scripts/conformance_test.py
+
+  fuzz:
+    name: Fuzz Targets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          # Kept in step with fuzz/rust-toolchain.toml. cargo-fuzz needs
+          # nightly; the rest of the build stays on the stable pin. See
+          # docs/FUZZING.md for why this is a second toolchain rather than a
+          # stable-only fuzzer.
+          toolchain: nightly-2025-12-14
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      # Longer than the local gate's 10s, short enough to keep a merge quick.
+      # AddressSanitizer is enabled here: the runner is Linux, where it works.
+      # scripts/fuzz.sh disables it only on Darwin, and says why.
+      - run: scripts/fuzz.sh 120
+      # A crash is only actionable if the input that caused it survives the
+      # runner. Uploaded on failure, because on success there is nothing there.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
