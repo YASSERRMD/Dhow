@@ -786,3 +786,267 @@ func TestRecvJSONReportsResumeCounts(t *testing.T) {
 		t.Errorf("state_dir = %q, want %q", result.StateDir, stateDir)
 	}
 }
+
+// --- verify ---
+
+// verified runs verify and returns its exit code and parsed JSON result.
+func verified(t *testing.T, frameDir, dir string) (int, verifyResult) {
+	t.Helper()
+	code, out, errOut := run("verify", "-in", frameDir, "-dir", dir, "-json")
+	var result verifyResult
+	if out != "" {
+		if err := json.Unmarshal([]byte(out), &result); err != nil {
+			t.Fatalf("parsing verify JSON: %v\n%s\n%s", err, out, errOut)
+		}
+	}
+	return code, result
+}
+
+// problemFor returns the problem reported for a file, or a zero value.
+func problemFor(result verifyResult, name string) Problem {
+	for _, p := range result.Problems {
+		if p.File == name {
+			return p
+		}
+	}
+	return Problem{}
+}
+
+// received sends a dataset and receives it, returning the frame and output
+// directories along with the dataset that was sent.
+func received(t *testing.T) (frameDir, outDir, dataDir string) {
+	t.Helper()
+	key, frameDir, dataDir := sendFixture(t, "2")
+	outDir = filepath.Join(t.TempDir(), "received")
+
+	code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir)
+	if code != ExitOK {
+		t.Fatalf("recv exited %d: %s", code, errOut)
+	}
+	return frameDir, outDir, dataDir
+}
+
+func TestVerifyAcceptsTheDatasetThatWasSent(t *testing.T) {
+	frameDir, outDir, dataDir := received(t)
+
+	code, result := verified(t, frameDir, outDir)
+	if code != ExitOK {
+		t.Fatalf("verify exited %d with problems %+v", code, result.Problems)
+	}
+	if !result.OK {
+		t.Error("verify reported not-OK on a good dataset")
+	}
+	if len(result.Problems) != 0 {
+		t.Errorf("verify found problems in a good dataset: %+v", result.Problems)
+	}
+
+	// Every file must have actually been read, not merely counted.
+	wantFiles := len(listFiles(t, dataDir))
+	if result.Files != wantFiles || result.Checked != wantFiles {
+		t.Errorf("files = %d, checked = %d, want %d of each", result.Files, result.Checked, wantFiles)
+	}
+	if result.Bytes == 0 {
+		t.Error("verify read no bytes, so it cannot have checked any contents")
+	}
+}
+
+func TestVerifyCatchesASingleFlippedByte(t *testing.T) {
+	// The case the old file count could never catch: the dataset has the right
+	// shape and one wrong bit.
+	frameDir, outDir, _ := received(t)
+
+	target := filepath.Join(outDir, "bulk.bin")
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	data[len(data)/2] ^= 0x01
+	if err := os.WriteFile(target, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	code, result := verified(t, frameDir, outDir)
+	if code != ExitVerifyFailed {
+		t.Fatalf("verify exited %d, want %d", code, ExitVerifyFailed)
+	}
+	p := problemFor(result, "bulk.bin")
+	if p.Kind != ProblemContent {
+		t.Errorf("problem kind = %q, want %q (problems: %+v)", p.Kind, ProblemContent, result.Problems)
+	}
+	if len(result.Problems) != 1 {
+		t.Errorf("one flipped byte produced %d problems: %+v", len(result.Problems), result.Problems)
+	}
+}
+
+func TestVerifyReportsATruncatedFileAsTruncated(t *testing.T) {
+	// A truncated file would also fail its digest. Reporting it as a size
+	// mismatch says what happened; a digest mismatch says only that something
+	// did.
+	frameDir, outDir, _ := received(t)
+
+	target := filepath.Join(outDir, "bulk.bin")
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if err := os.Truncate(target, info.Size()-100); err != nil {
+		t.Fatalf("Truncate: %v", err)
+	}
+
+	code, result := verified(t, frameDir, outDir)
+	if code != ExitVerifyFailed {
+		t.Fatalf("verify exited %d, want %d", code, ExitVerifyFailed)
+	}
+	if p := problemFor(result, "bulk.bin"); p.Kind != ProblemSize {
+		t.Errorf("problem kind = %q, want %q", p.Kind, ProblemSize)
+	}
+}
+
+func TestVerifyReportsAMissingFile(t *testing.T) {
+	frameDir, outDir, _ := received(t)
+	if err := os.Remove(filepath.Join(outDir, "readme.md")); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	code, result := verified(t, frameDir, outDir)
+	if code != ExitVerifyFailed {
+		t.Fatalf("verify exited %d, want %d", code, ExitVerifyFailed)
+	}
+	if p := problemFor(result, "readme.md"); p.Kind != ProblemMissing {
+		t.Errorf("problem kind = %q, want %q", p.Kind, ProblemMissing)
+	}
+}
+
+func TestVerifyReportsAFileNobodySent(t *testing.T) {
+	// A dataset with something extra in it is not the dataset that was
+	// transferred, whatever else is right about it.
+	frameDir, outDir, _ := received(t)
+	if err := os.WriteFile(filepath.Join(outDir, "planted.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	code, result := verified(t, frameDir, outDir)
+	if code != ExitVerifyFailed {
+		t.Fatalf("verify exited %d, want %d", code, ExitVerifyFailed)
+	}
+	if p := problemFor(result, "planted.txt"); p.Kind != ProblemUnexpected {
+		t.Errorf("problem kind = %q, want %q", p.Kind, ProblemUnexpected)
+	}
+}
+
+func TestVerifyReportsALostExecutableBit(t *testing.T) {
+	key, frameDir, dataDir := sendFixture(t, "2")
+	script := filepath.Join(dataDir, "run.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Re-send so the inventory knows the script is executable.
+	frameDir = filepath.Join(t.TempDir(), "frames")
+	code, _, errOut := run("send", "-key", key, "-in", dataDir, "-out", frameDir,
+		"-blocks", "2", "-symbol-size", "256")
+	if code != ExitOK {
+		t.Fatalf("send exited %d: %s", code, errOut)
+	}
+
+	outDir := filepath.Join(t.TempDir(), "received")
+	if code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir); code != ExitOK {
+		t.Fatalf("recv exited %d: %s", code, errOut)
+	}
+	if code, result := verified(t, frameDir, outDir); code != ExitOK {
+		t.Fatalf("verify of a good dataset exited %d: %+v", code, result.Problems)
+	}
+
+	if err := os.Chmod(filepath.Join(outDir, "run.sh"), 0o644); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+
+	code, result := verified(t, frameDir, outDir)
+	if code != ExitVerifyFailed {
+		t.Fatalf("verify exited %d, want %d", code, ExitVerifyFailed)
+	}
+	if p := problemFor(result, "run.sh"); p.Kind != ProblemMode {
+		t.Errorf("problem kind = %q, want %q (problems: %+v)", p.Kind, ProblemMode, result.Problems)
+	}
+}
+
+func TestVerifyReportsEveryProblemAtOnce(t *testing.T) {
+	// An operator staring at a dataset that came back wrong needs the whole
+	// picture. Stopping at the first problem would mean one run per problem.
+	frameDir, outDir, _ := received(t)
+
+	if err := os.Remove(filepath.Join(outDir, "readme.md")); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "planted.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	target := filepath.Join(outDir, "bulk.bin")
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	data[0] ^= 0xFF
+	if err := os.WriteFile(target, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	code, result := verified(t, frameDir, outDir)
+	if code != ExitVerifyFailed {
+		t.Fatalf("verify exited %d, want %d", code, ExitVerifyFailed)
+	}
+
+	kinds := map[string]bool{}
+	for _, p := range result.Problems {
+		kinds[p.Kind] = true
+	}
+	for _, want := range []string{ProblemMissing, ProblemUnexpected, ProblemContent} {
+		if !kinds[want] {
+			t.Errorf("verify did not report a %q problem: %+v", want, result.Problems)
+		}
+	}
+}
+
+func TestVerifyReportsAnUnreadableDataset(t *testing.T) {
+	frameDir, _, _ := received(t)
+
+	code, result := verified(t, frameDir, filepath.Join(t.TempDir(), "nothing-here"))
+	if code != ExitVerifyFailed {
+		t.Fatalf("verify exited %d, want %d", code, ExitVerifyFailed)
+	}
+	if len(result.Problems) != 1 || result.Problems[0].Kind != ProblemUnreadable {
+		t.Errorf("problems = %+v, want a single unreadable problem", result.Problems)
+	}
+}
+
+func TestVerifyRejectsAnOlderTransferRecord(t *testing.T) {
+	// A version 1 record has no inventory, so verifying against it would be
+	// the file count again. Refusing is the honest answer.
+	frameDir, outDir, _ := received(t)
+
+	path := filepath.Join(frameDir, recordName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	raw["version"] = 1
+	patched, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if err := os.WriteFile(path, patched, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	code, _, errOut := run("verify", "-in", frameDir, "-dir", outDir)
+	if code != ExitInput {
+		t.Fatalf("verify with a v1 record exited %d, want %d: %s", code, ExitInput, errOut)
+	}
+	if !strings.Contains(errOut, "version 2") {
+		t.Errorf("the error does not say which version this build reads: %s", errOut)
+	}
+}
