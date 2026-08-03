@@ -18,6 +18,136 @@ consequence, not an implementation detail.
 `-quiet` and `-verbose` change what is printed without changing exit codes or
 JSON; a cold-start drill following only the guide completes a transfer.
 
+### The guide is a gate, not a document
+
+`scripts/drill.sh` runs the commands `docs/OPERATIONS.md` tells an operator to
+run, with the parameters from its own worked example, and checks the claims it
+makes rather than the code's behaviour: mode 0600, a permissive key refused, an
+existing key not overwritten, symbol size 1320 fitting QR version 30 at ECC M,
+the per-block progress line the troubleshooting section tells operators to
+read, and every exit code in its table. It also greps the guide for the
+commands it copied, so editing the worked example without updating the drill
+fails rather than leaving the drill silently testing something the guide no
+longer says.
+
+A guide is only as good as the last time someone followed it, and nobody
+follows a guide they wrote. This does, on every gate run and on every pull
+request.
+
+Writing it found one real error in the guide immediately: the display example
+used a frame rate above the 120 fps the command accepts. An operator would
+have hit that after setting up a camera.
+
+### The block-count advice is demonstrated, not asserted
+
+The guide's longest section asks an operator to choose a prime block count on
+the strength of a claim about periodic loss. Phase 23 established that
+interleaving fixed contiguous outage but moved the pathological case to loss
+on a period *equal to* the block count, which now concentrates on one block.
+
+The drill demonstrates it. The same dataset is sent at 8 blocks and at 11, and
+every 8th frame is dropped from both:
+
+```
+  PASS  the guide's block-count advice holds: 8 blocks fails where 11 survives
+```
+
+The 8-block transfer exits 4 and the 11-block transfer round trips byte for
+byte, under identical loss. An operator is being asked to change a parameter
+on the basis of that claim, so the claim carries its own evidence.
+
+### Verbosity: three decisions worth recording
+
+`-quiet` and `-verbose` are registered by every command through one helper, so
+they mean the same thing everywhere. Three choices:
+
+- **`-quiet` never suppresses a failure.** It drops the end-of-command summary
+  a person reads. A `verify` that failed still reports its problems, because a
+  display preference that hides a correctness result is a hazard, not a
+  preference.
+- **`-quiet` never suppresses `-json`.** A caller asking for machine output and
+  silence together wants the JSON; dropping it would be data loss dressed up as
+  quiet.
+- **Both together is exit 1, not a precedence rule.** Guessing which was meant
+  would make the tool unpredictable in exactly the situation where the operator
+  is already unsure what it is doing.
+
+Progress is reported by block rather than by frame. Frames arrive in their
+thousands and almost none of them change anything an operator can act on; a
+block completing is the unit of real progress and is what tells them whether
+moving the camera is helping.
+
+### The wrong key now says so
+
+A wrong key is indistinguishable from a bad camera angle until the stream
+ends, which on a real capture is hours: frames arrive, none authenticate, and
+the block count sits at zero. Fifty frames read with none accepted is not
+ambiguous, so `-verbose` says it outright. The threshold is high enough not to
+fire on the ordinary run of unreadable frames at the start of a capture,
+because a warning that cries wolf on healthy runs gets ignored on the run
+where it matters. A test asserts both halves of that.
+
+### Exit code 5 is deliberately unprovoked
+
+Five of the six documented codes have a test that produces them. `5` means an
+internal bug. Provoking it would mean building a fault-injection path into the
+shipped binary to prove a code that says "this should never happen", which
+would be a worse trade than the coverage is worth. `docs/UX-REVIEW.md` records
+that as a known gap rather than leaving the row looking complete.
+
+### Deviation
+
+The pack's Phase 32 gate calls for "a cold-start operator following only the
+doc". The drill is a scripted simulation of that, not a person, and it cannot
+exercise the camera, which does not exist. The guide states that limitation in
+its first paragraph so a reader does not follow it expecting hardware to work.
+
+The throughput table is arithmetic over the measured QR capacity table rather
+than measurements of a real camera, and says so in the text. An operator plans
+a seven-hour capture around those numbers; presenting derived figures as
+observed ones would be worse than presenting no figures at all.
+
+### Drill output
+
+```
+$ scripts/drill.sh
+  PASS  the drill matches the guide's worked example
+  PASS  key ceremony behaves as the guide describes
+  PASS  sent 528 frames and they fit the guide's QR version
+  PASS  receive reported the progress the guide tells operators to watch
+  PASS  dataset round tripped and verified
+  PASS  every exit code in the guide's table is the code produced
+  PASS  the guide's block-count advice holds: 8 blocks fails where 11 survives
+=== DRILL PASSED ===
+```
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+=== GATE: cargo fmt --check ===        PASS
+=== GATE: cargo clippy -D warnings === PASS
+=== GATE: cargo test ===               PASS
+=== GATE: cargo audit ===              PASS
+=== GATE: cargo deny ===               PASS
+=== GATE: ABI drift ===                PASS
+=== GATE: build rust core for cgo ===  PASS
+=== GATE: go vet ===                   PASS
+=== GATE: go test -race ===            PASS
+=== GATE: go build ===                 PASS
+=== GATE: golangci-lint ===            PASS
+=== GATE: govulncheck ===              PASS
+=== GATE: loopback end-to-end ===      PASS
+=== GATE: operations guide drill ===   PASS
+
+=== GATE SUMMARY ===
+  Passed: 14
+  Failed: 0
+ALL GATES PASSED
+```
+
+The gate grows to fourteen checks. 21 atomic commits.
+
 ## Phase 25 - Verification that checks contents
 
 **Objective:** `dhow verify` currently counts files. A dataset with the right
