@@ -115,8 +115,7 @@ func Create(w io.Writer, root string) ([]Entry, error) {
 
 	header := make([]byte, 0, 4+1+3+4)
 	header = append(header, Magic[:]...)
-	header = append(header, Version)
-	header = append(header, 0, 0, 0) // reserved
+	header = append(header, Version, 0, 0, 0) // version then three reserved bytes
 	header = binary.LittleEndian.AppendUint32(header, uint32(len(entries)))
 	if _, err := w.Write(header); err != nil {
 		return nil, fmt.Errorf("writing archive header: %w", err)
