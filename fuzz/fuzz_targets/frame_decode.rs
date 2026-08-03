@@ -14,10 +14,13 @@
 //!   actually carries, so the length field cannot describe one thing while the
 //!   decoder is handed another.
 //! - Parsing is deterministic: the same bytes give the same answer twice.
+//! - A frame whose MAC and CRC have been repaired carries back exactly the
+//!   payload it was given. See the comment on the repair below for why this
+//!   path exists at all.
 
 #![no_main]
 
-use dhow_codec::frame::{FRAME_HEADER_SIZE, Frame, FrameHeader};
+use dhow_codec::frame::{FRAME_HEADER_SIZE, Frame, FrameHeader, MAX_PAYLOAD_LEN};
 use libfuzzer_sys::fuzz_target;
 
 /// The session key the parser authenticates against.
@@ -50,19 +53,66 @@ fuzz_target!(|data: &[u8]| {
         assert_eq!(again.to_vec(), round_tripped);
     }
 
-    // The whole frame, including MAC and CRC. Reaching this needs a correct
-    // MAC, which the fuzzer will not guess; the corpus seeds it with real
-    // frames so the path is exercised rather than merely present.
+    // The whole frame, unaltered. Almost always rejected at the MAC, which is
+    // the path a real attacker without the key gets, and worth exercising.
     if let Ok(frame) = Frame::from_bytes(data, &SESSION_KEY) {
-        assert_eq!(
-            frame.payload().len(),
-            frame.header().payload_length() as usize,
-            "a frame's declared payload length disagrees with its payload"
-        );
-        assert_eq!(
-            frame.to_vec().len(),
-            FRAME_HEADER_SIZE + frame.payload().len(),
-            "a frame serialized to a length its parts do not account for"
-        );
+        check_frame(&frame);
+    }
+
+    // The whole frame, with the MAC and CRC fixed up so it authenticates.
+    //
+    // Without this the target only ever tests the rejection path: a fuzzer will
+    // not produce eight bytes of keyed MAC by mutation, so every input dies at
+    // the first check and the code that reads a length and slices a payload is
+    // never reached. Repairing the two integrity fields is the standard way
+    // past a checksum gate, and it is sound here because the fields being
+    // repaired are exactly the ones a sender computes: everything the fuzzer
+    // still controls - the block and symbol indices, the declared length, the
+    // payload, and the version and type bytes - is what a *legitimate but
+    // malicious* sender controls, which is the threat this side of the MAC.
+    if data.len() >= FRAME_HEADER_SIZE {
+        let (head, body) = data.split_at(FRAME_HEADER_SIZE);
+
+        if let Ok(header) = FrameHeader::from_bytes(head) {
+            // FrameHeader::new panics above MAX_PAYLOAD_LEN, which is a
+            // contract on the sender rather than on parsed input, so the
+            // length is bounded here rather than being handed straight over.
+            let body = &body[..body.len().min(MAX_PAYLOAD_LEN as usize)];
+
+            let mut repaired = FrameHeader::new(
+                header.frame_type(),
+                header.session_id(),
+                header.block_index(),
+                header.symbol_index(),
+                body,
+            );
+            repaired.set_mac(repaired.compute_mac(&SESSION_KEY));
+
+            let mut whole = repaired.to_vec();
+            whole.extend_from_slice(body);
+
+            let frame = Frame::from_bytes(&whole, &SESSION_KEY)
+                .expect("a frame with a repaired MAC and CRC did not authenticate");
+            check_frame(&frame);
+            assert_eq!(
+                frame.payload(),
+                body,
+                "a repaired frame did not carry back the payload it was given"
+            );
+        }
     }
 });
+
+/// Asserts what a parsed frame promises about itself.
+fn check_frame(frame: &Frame) {
+    assert_eq!(
+        frame.payload().len(),
+        frame.header().payload_length() as usize,
+        "a frame's declared payload length disagrees with its payload"
+    );
+    assert_eq!(
+        frame.to_vec().len(),
+        FRAME_HEADER_SIZE + frame.payload().len(),
+        "a frame serialized to a length its parts do not account for"
+    );
+}
