@@ -5,4 +5,5 @@
 - [Verifying a Received Dataset](VERIFY.md)
 - [Operations Guide](OPERATIONS.md)
 - [Operator UX Review](UX-REVIEW.md)
+- [Backlog](BACKLOG.md)
 - [Phase Log](phase-log.md)
