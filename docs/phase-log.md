@@ -1,5 +1,111 @@
 # Phase Log
 
+## Phase 32 - Security review
+
+**Objective:** `docs/THREAT-MODEL.md` has carried a requirements checklist since
+Phase 2 whose Status column has been wrong for most of the project's life -
+"Planned (Phase 15)" against work that shipped in Phase 15, and so on. Phase 28
+added a note saying so rather than quietly correcting rows nobody had audited.
+This phase does the audit: every claim in the threat model is traced to a named
+test or gate that enforces it, or is recorded as unenforced. `cargo geiger`
+confirms where `unsafe` actually lives. The document becomes v1.
+
+**Gates:** a traceability table with no gaps - meaning no row without either an
+enforcing test named by function, or an explicit statement that nothing enforces
+it; `cargo geiger` output recorded; every "Planned" resolved to what is true.
+
+### The table, and what "no gaps" was made to mean
+
+47 rows. Each names either the test that fails if the control is removed -
+precisely enough to run - or says that nothing does. The Status column has three
+values and only three:
+
+- **Enforced**: a named test or gate bites.
+- **Review**: the property holds by construction or was checked by reading, and
+  nothing would fail if it stopped holding.
+- **Absent**: a control an earlier version of this document claimed, which does
+  not exist.
+
+"No gaps" was read as *no row whose status is unstated*, not as *no row that is
+unenforced*. The second reading would have produced a table with nothing in it
+worth reading, because the way to reach it is to delete the inconvenient rows.
+
+**Six rows are enforced by nothing**, and the document says which:
+
+| Row | Claim | Why it is not tested |
+|-----|-------|----------------------|
+| 9 | No secret-dependent branching in `dhow-crypt` | Testable, untested |
+| 10 | Key material zeroized on drop | Observing it means reading freed memory |
+| 14 | No raw key bytes across the ABI | Testable, untested |
+| 27 | A shoulder-surfer sees only ciphertext | Photographing a screen is not a unit test |
+| 45 | Every FFI entry point catches unwinds | Testable, untested |
+| 46 | No network calls in the data path | Testable, untested |
+
+Rows 10 and 27 are probably not worth testing. Rows 9, 14, 45, and 46 are each a
+source-level scan over a small surface and are simply not done; they are B-9.
+
+Row 46 is the one worth naming twice, because the master spec says CI "enforces"
+it and **nothing does**. `cargo deny` checks licenses, advisories, and duplicate
+versions - not sockets. The dependency tree contains no networking crate, which
+was verified by reading it, and nothing would notice if one were added.
+
+### `cargo geiger` confirmed the architecture
+
+```
+Functions  Expressions  Impls  Traits  Methods  Dependency
+
+51/51      1020/1066    0/0    0/0     0/0      !  dhow-ffi 0.1.0
+0/0        0/0          0/0    0/0     0/0      :) |-- dhow-codec 0.1.0
+0/0        0/0          0/0    0/0     0/0      :) `-- dhow-crypt 0.1.0
+```
+
+Zero unsafe expressions in `dhow-codec` and `dhow-crypt`; all of it in
+`dhow-ffi`, where the ABI requires it. That is the architecture the master spec
+fixes, confirmed by a tool rather than asserted - though `#![forbid(unsafe_code)]`
+was already a compile error rather than a lint, so geiger is corroboration and
+not the control.
+
+The whole tree carries 91/336 unsafe functions, almost all in `libc`,
+`generic-array`, `curve25519-dalek`, and `zeroize`. Those are the audited
+primitives the spec requires be used rather than reimplemented, and their
+`unsafe` is the price of that decision.
+
+### The audit found an error in the document itself
+
+The Assets table described the operator key as "Long-term identity key
+(Ed25519)". It is a 32-byte symmetric secret, and since Phase 28 it is one of
+*two* keys with opposite distribution rules. The table both conflated them and
+described a symmetric key as asymmetric.
+
+Every control built on the distinction was correct - the code has separate
+handles, separate key-file kinds, and a test that they are not interchangeable.
+What was wrong was the document a reader would use to understand why. That is
+precisely what an audit is for, and it is the reason a threat model that is
+never re-read is worth less than no threat model at all.
+
+### Deviation: 3 atomic commits
+
+The phase is one audit producing one document, one backlog entry, and the log.
+Splitting the traceability table into sections would produce commits that each
+leave the document self-contradictory. Recorded rather than padded, as in Phases
+30 and 31.
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+=== GATE SUMMARY ===
+  Passed:  21
+  Failed:  0
+  Skipped: 0
+ALL GATES PASSED
+```
+
+No gate was added. This phase produced no code, which is the honest outcome for
+an audit whose finding is "four things are untested" rather than "four things
+are broken" - the tests belong to B-9 and writing them here would have been a
+different phase wearing this one's name.
+
 ## Phase 31 - Benchmarks and a memory budget
 
 **Objective:** nothing in this tree measures how fast anything is or how much

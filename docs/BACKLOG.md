@@ -151,6 +151,34 @@ does not need an ABI change.
 
 `scripts/rss.sh` enforces an 8x budget.
 
+### B-9: four testable security claims are untested (Phase 32)
+
+The Phase 32 traceability table in `docs/THREAT-MODEL.md` found six controls
+that nothing enforces. Two of them are probably not worth testing - observing a
+zeroized buffer means reading freed memory, and photographing a screen is not a
+unit test. The other four are each a source-level scan over a small surface:
+
+1. **No secret-dependent branching in `dhow-crypt`** (row 9). Secrets are
+   compared with `subtle::ConstantTimeEq` today. A future comparison written
+   with `==` would pass every gate. A scan for `==` and `!=` against the secret
+   types would catch it.
+2. **No raw key bytes across the ABI** (row 14). No `extern "C"` signature takes
+   or returns key material, which is the property the handle design exists for.
+   `scripts/check_abi.sh` compares the three views of the ABI and does not check
+   this. A scan of the generated header for a pointer argument named like a key
+   would.
+3. **Every FFI entry point catches unwinds** (row 45). Every body in `handle.rs`
+   is wrapped in `guard` or `guard_ptr`; an unwrapped one would be undefined
+   behaviour across the boundary and a release blocker. A scan for an
+   `extern "C" fn` whose body does not open with `guard` would catch it.
+4. **No networking dependency** (row 46). The dependency tree contains none,
+   verified by reading it. `cargo deny` checks licenses, advisories, and
+   duplicate versions - not sockets. A `[bans] deny` list naming the common
+   networking crates would.
+
+All four are cheap and none is done. They belong together as one lint pass over
+the source, wired into `scripts/gate.sh`.
+
 ## Closed
 
 ### B-4: no fuzzing targets (Phase 2, closed Phase 29)
