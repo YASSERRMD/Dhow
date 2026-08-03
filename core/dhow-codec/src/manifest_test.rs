@@ -473,3 +473,48 @@ fn signing_bytes_of_matches_signing_bytes() {
         manifest.signing_bytes()
     );
 }
+
+#[test]
+fn trailing_bytes_after_the_last_entry_are_rejected() {
+    // Found while writing the manifest fuzz target in Phase 29. Nothing this
+    // code writes has a tail, so anything after the last entry is corruption
+    // or a forgery, and a parser whose output does not describe its input is a
+    // trap for the next caller who parses without verifying.
+    let entries = make_entries();
+    let hdr = header([0x42; 16], &entries, 15);
+    let manifest = Manifest::build(&hdr, &entries, &test_signature());
+
+    let clean = manifest.to_vec();
+    assert!(
+        Manifest::from_bytes(&clean).is_ok(),
+        "a manifest with no tail was rejected"
+    );
+
+    let mut with_tail = clean.clone();
+    with_tail.extend_from_slice(b"TRAILING");
+    let err = Manifest::from_bytes(&with_tail).unwrap_err().to_string();
+    assert!(
+        err.contains("trailing bytes"),
+        "a manifest with a tail was rejected with: {err}"
+    );
+
+    // A single byte counts. The check is exact, not a tolerance.
+    let mut one_extra = clean.clone();
+    one_extra.push(0);
+    assert!(
+        Manifest::from_bytes(&one_extra).is_err(),
+        "a manifest with one trailing byte was accepted"
+    );
+}
+
+#[test]
+fn a_manifest_that_parses_re_serializes_to_its_own_input() {
+    // The property the trailing-byte check exists to make true, stated as the
+    // property rather than as the mechanism.
+    let entries = make_entries();
+    let hdr = header([0x42; 16], &entries, 15);
+    let bytes = Manifest::build(&hdr, &entries, &test_signature()).to_vec();
+
+    let parsed = Manifest::from_bytes(&bytes).unwrap();
+    assert_eq!(parsed.to_vec(), bytes);
+}

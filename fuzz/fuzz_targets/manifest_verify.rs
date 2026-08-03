@@ -9,7 +9,8 @@
 //!
 //! - Neither parsing nor verification panics.
 //! - A parsed manifest carries exactly the number of entries its header
-//!   declares, and re-serializes to the bytes it came from.
+//!   declares, and re-serializes to exactly the bytes it came from - every
+//!   byte accounted for, no trailing region quietly ignored.
 //! - **Verification means verification.** Anything `verify_manifest_with`
 //!   accepts must really carry a valid signature over its own canonical
 //!   signing bytes, checked here independently of the code under test. This is
@@ -46,6 +47,9 @@ fuzz_target!(|data: &[u8]| {
             "a parsed manifest carries a different number of entries than it declares"
         );
 
+        // Exact, not a prefix. The parser rejects trailing bytes, so a parsed
+        // manifest accounts for every byte it was given - which is what makes
+        // to_vec() a description of the input rather than of part of it.
         let serialized = manifest.to_vec();
         assert!(
             serialized.len() >= MANIFEST_HEADER_SIZE,
@@ -53,8 +57,14 @@ fuzz_target!(|data: &[u8]| {
             serialized.len()
         );
         assert_eq!(
+            serialized.len(),
+            data.len(),
+            "a parsed manifest left {} bytes unaccounted for",
+            data.len().saturating_sub(serialized.len())
+        );
+        assert_eq!(
             &serialized[..],
-            &data[..serialized.len()],
+            data,
             "a parsed manifest did not re-serialize to the bytes it came from"
         );
 

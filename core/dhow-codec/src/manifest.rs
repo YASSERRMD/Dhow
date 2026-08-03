@@ -607,6 +607,26 @@ impl Manifest {
             offset += consumed;
         }
 
+        // The manifest must end exactly at its last entry.
+        //
+        // Nothing this code writes has trailing bytes, so anything after the
+        // last entry is either corruption or a forgery. The resume parser has
+        // rejected the same shape since Phase 12, with the same reasoning; this
+        // one accepted and silently ignored it, which meant `to_vec()` and the
+        // bytes it was parsed from could differ. That is not exploitable today
+        // - the signature covers the whole buffer, so a legitimate manifest
+        // cannot carry a tail and an appended one does not verify - but a
+        // parser whose output does not describe its input is a trap laid for
+        // the next caller who parses without verifying.
+        if offset != bytes.len() {
+            return Err(ManifestError::Malformed {
+                details: format!(
+                    "{} trailing bytes after the last file entry",
+                    bytes.len() - offset
+                ),
+            });
+        }
+
         Ok(Self { header, entries })
     }
 

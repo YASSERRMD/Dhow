@@ -154,8 +154,13 @@ fn manifest_regressions_describe_themselves() {
         let serialized = manifest.to_vec();
         assert!(serialized.len() >= MANIFEST_HEADER_SIZE, "{name}");
         assert_eq!(
+            serialized.len(),
+            data.len(),
+            "{name}: a parsed manifest left bytes unaccounted for"
+        );
+        assert_eq!(
             &serialized[..],
-            &data[..serialized.len()],
+            &data[..],
             "{name}: a parsed manifest did not re-serialize to its own bytes"
         );
         assert_eq!(
