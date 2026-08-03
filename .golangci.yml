@@ -48,8 +48,11 @@ linters:
           - gosec
       # gocritic reads cgo's pseudo-package `C` and `unsafe` as the same import
       # appearing twice. Both are required to bind the Rust core, and there is
-      # no source-level way to satisfy the check.
-      - path: internal/ffi/ffi\.go
+      # no source-level way to satisfy the check. Scoped to the ffi package
+      # rather than to one file in it: every file there binds cgo, and pinning
+      # the exemption to a filename means the next binding file fails the lint
+      # for a reason that has nothing to do with it.
+      - path: internal/ffi/
         linters:
           - gocritic
         text: dupImport

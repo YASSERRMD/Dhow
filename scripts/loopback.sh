@@ -72,12 +72,15 @@ pass "built a ${ACTUAL_MB} MiB fixture"
 
 "$DHOW" keygen -out "$WORK/operator.key" >/dev/null
 "$DHOW" keygen -out "$WORK/wrong.key" >/dev/null
-pass "generated operator keys"
+"$DHOW" keygen -kind identity -out "$WORK/sender.key" >/dev/null
+"$DHOW" keygen -kind identity -out "$WORK/stranger.key" >/dev/null
+pass "generated operator keys and signing identities"
 
 # --- Send ---
 
 START=$(date +%s)
-"$DHOW" send -key "$WORK/operator.key" -in "$DATA" -out "$WORK/frames" \
+"$DHOW" send -key "$WORK/operator.key" -identity "$WORK/sender.key" \
+    -in "$DATA" -out "$WORK/frames" \
     -symbol-size 1024 -blocks 8 -overhead 60 -json > "$WORK/send.json"
 SEND_END=$(date +%s)
 
@@ -87,7 +90,7 @@ pass "sent ${FRAME_COUNT} frames in $((SEND_END - START))s"
 
 # --- Clean receive ---
 
-"$DHOW" recv -key "$WORK/operator.key" -in "$WORK/frames" -out "$WORK/clean" >/dev/null
+"$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$WORK/frames" -out "$WORK/clean" >/dev/null
 diff -r "$DATA" "$WORK/clean" >/dev/null || fail "clean transfer did not round trip"
 pass "clean transfer round trips byte for byte"
 
@@ -121,7 +124,7 @@ fi
 if [ "$DROPPED" -eq 0 ]; then
     pass "loss injection disabled (0%)"
 else
-    "$DHOW" recv -key "$WORK/operator.key" -in "$LOSSY" -out "$WORK/recovered" >/dev/null \
+    "$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$LOSSY" -out "$WORK/recovered" >/dev/null \
         || fail "transfer did not survive ${DROPPED} dropped frames"
     diff -r "$DATA" "$WORK/recovered" >/dev/null \
         || fail "recovered dataset differs after frame loss"
@@ -149,7 +152,7 @@ for f in "$OUTAGE"/frame-*.bin; do
     i=$((i + 1))
 done
 
-"$DHOW" recv -key "$WORK/operator.key" -in "$OUTAGE" -out "$WORK/from-outage" >/dev/null \
+"$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$OUTAGE" -out "$WORK/from-outage" >/dev/null \
     || fail "transfer did not survive a contiguous outage of ${RUN} frames"
 diff -r "$DATA" "$WORK/from-outage" >/dev/null \
     || fail "contiguous outage produced a different dataset"
@@ -162,7 +165,7 @@ cp -R "$WORK/frames" "$CORRUPT"
 for f in $(find "$CORRUPT" -name 'frame-*.bin' | head -5); do
     printf '\xff' | dd of="$f" bs=1 seek=50 conv=notrunc status=none
 done
-"$DHOW" recv -key "$WORK/operator.key" -in "$CORRUPT" -out "$WORK/from-corrupt" >/dev/null \
+"$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$CORRUPT" -out "$WORK/from-corrupt" >/dev/null \
     || fail "transfer did not survive corrupted frames"
 diff -r "$DATA" "$WORK/from-corrupt" >/dev/null \
     || fail "corrupted frames produced a different dataset"
@@ -184,7 +187,7 @@ SECOND_STOP=$((FRAME_COUNT / 2))
 
 for STOP in "$FIRST_STOP" "$SECOND_STOP"; do
     set +e
-    "$DHOW" recv -key "$WORK/operator.key" -in "$WORK/frames" -out "$RESUMED" \
+    "$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$WORK/frames" -out "$RESUMED" \
         -state "$STATE" -stop-after "$STOP" -save-every 50 >/dev/null 2>&1
     STOP_EXIT=$?
     set -e
@@ -193,7 +196,7 @@ for STOP in "$FIRST_STOP" "$SECOND_STOP"; do
     [ -f "$STATE/resume.dhrs" ] || fail "an interrupted receive saved no resume state"
 done
 
-"$DHOW" recv -key "$WORK/operator.key" -in "$WORK/frames" -out "$RESUMED" \
+"$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$WORK/frames" -out "$RESUMED" \
     -state "$STATE" >/dev/null 2>&1 || fail "a resumed transfer did not complete"
 diff -r "$DATA" "$RESUMED" >/dev/null || fail "a resumed transfer produced a different dataset"
 [ ! -f "$STATE/resume.dhrs" ] || fail "resume state survived a completed transfer"
@@ -204,7 +207,7 @@ pass "resumed through two interruptions and round tripped byte for byte"
 
 TAMPER="$WORK/tamper-state"
 set +e
-"$DHOW" recv -key "$WORK/operator.key" -in "$WORK/frames" -out "$WORK/tampered" \
+"$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$WORK/frames" -out "$WORK/tampered" \
     -state "$TAMPER" -stop-after "$FIRST_STOP" >/dev/null 2>&1
 set -e
 
@@ -212,7 +215,7 @@ set -e
 # be rewritten to make a doctored journal look like the expected one.
 printf '\xff' | dd of="$TAMPER/resume.dhrs" bs=1 seek=40 conv=notrunc status=none
 set +e
-"$DHOW" recv -key "$WORK/operator.key" -in "$WORK/frames" -out "$WORK/tampered" \
+"$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$WORK/frames" -out "$WORK/tampered" \
     -state "$TAMPER" >/dev/null 2>&1
 TAMPER_EXIT=$?
 set -e
@@ -220,12 +223,12 @@ set -e
 
 JOURNAL_TAMPER="$WORK/journal-state"
 set +e
-"$DHOW" recv -key "$WORK/operator.key" -in "$WORK/frames" -out "$WORK/tampered2" \
+"$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$WORK/frames" -out "$WORK/tampered2" \
     -state "$JOURNAL_TAMPER" -stop-after "$FIRST_STOP" >/dev/null 2>&1
 set -e
 printf '\xff' | dd of="$JOURNAL_TAMPER/journal.bin" bs=1 seek=60 conv=notrunc status=none
 set +e
-"$DHOW" recv -key "$WORK/operator.key" -in "$WORK/frames" -out "$WORK/tampered2" \
+"$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$WORK/frames" -out "$WORK/tampered2" \
     -state "$JOURNAL_TAMPER" >/dev/null 2>&1
 JOURNAL_EXIT=$?
 set -e
@@ -235,23 +238,71 @@ pass "tampered resume state and journal both fail closed"
 # --- Fail-closed cases ---
 
 set +e
-"$DHOW" recv -key "$WORK/wrong.key" -in "$WORK/frames" -out "$WORK/intruder" >/dev/null 2>&1
+"$DHOW" recv -key "$WORK/wrong.key" -signer "$WORK/sender.pub" -in "$WORK/frames" -out "$WORK/intruder" >/dev/null 2>&1
 WRONG_KEY_EXIT=$?
 set -e
 [ "$WRONG_KEY_EXIT" -eq 4 ] || fail "wrong key exited ${WRONG_KEY_EXIT}, expected 4"
 [ ! -d "$WORK/intruder" ] || fail "a failed transfer still wrote output"
 pass "wrong key fails closed and writes nothing"
 
+# --- The signature ---
+#
+# The whole point of the signed manifest is that it answers a question the
+# operator key cannot: not "was this encrypted with the key we share" but "was
+# this produced by the holder of the sending key". These two cases are what
+# distinguish the two questions, so they are checked separately from the
+# encryption failures above.
+
+set +e
+"$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/stranger.pub" \
+    -in "$WORK/frames" -out "$WORK/unsigned" >/dev/null 2>&1
+STRANGER_EXIT=$?
+set -e
+[ "$STRANGER_EXIT" -eq 3 ] || fail "a manifest signed by another identity exited ${STRANGER_EXIT}, expected 3"
+[ ! -d "$WORK/unsigned" ] || fail "a transfer with an unverifiable manifest still wrote output"
+pass "a manifest signed by another identity fails closed and writes nothing"
+
+# Every byte of the manifest is inside the signature, so altering any of them
+# must be caught. Sample rather than sweep: the exhaustive walk is a unit test,
+# and this is an end-to-end check that the CLI applies it at all.
+MANIFEST_LEN=$(wc -c < "$WORK/frames/manifest.bin" | tr -d ' ')
+for OFFSET in 8 40 70 110 130 200 $((MANIFEST_LEN - 1)); do
+    TAMPERED="$WORK/tampered-manifest"
+    rm -rf "$TAMPERED"
+    cp -R "$WORK/frames" "$TAMPERED"
+    printf '\xa5' | dd of="$TAMPERED/manifest.bin" bs=1 seek="$OFFSET" conv=notrunc status=none
+    set +e
+    "$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" \
+        -in "$TAMPERED" -out "$WORK/from-tampered" >/dev/null 2>&1
+    EXIT=$?
+    set -e
+    [ "$EXIT" -eq 3 ] \
+        || fail "a manifest altered at offset ${OFFSET} exited ${EXIT}, expected 3"
+    [ ! -d "$WORK/from-tampered" ] \
+        || fail "a transfer with an altered manifest at offset ${OFFSET} wrote output"
+done
+rm -rf "$WORK/tampered-manifest"
+pass "an altered manifest fails closed wherever it is altered"
+
 # --- Verify ---
 
-"$DHOW" verify -in "$WORK/frames" -dir "$WORK/clean" >/dev/null || fail "verify rejected a good dataset"
+"$DHOW" verify -in "$WORK/frames" -signer "$WORK/sender.pub" -dir "$WORK/clean" >/dev/null \
+    || fail "verify rejected a good dataset"
 pass "verify accepts a good dataset"
+
+set +e
+"$DHOW" verify -in "$WORK/frames" -signer "$WORK/stranger.pub" -dir "$WORK/clean" >/dev/null 2>&1
+VERIFY_STRANGER_EXIT=$?
+set -e
+[ "$VERIFY_STRANGER_EXIT" -eq 3 ] \
+    || fail "verify against the wrong identity exited ${VERIFY_STRANGER_EXIT}, expected 3"
+pass "verify rejects a dataset whose manifest was not signed by the expected identity"
 
 # One flipped byte in a multi-megabyte file, with every name, count, and size
 # left correct. This is the corruption a file count cannot see.
 printf '\xff' | dd of="$WORK/clean/bin/random.bin" bs=1 seek=4096 conv=notrunc status=none
 set +e
-"$DHOW" verify -in "$WORK/frames" -dir "$WORK/clean" -json > "$WORK/verify.json" 2>/dev/null
+"$DHOW" verify -in "$WORK/frames" -signer "$WORK/sender.pub" -dir "$WORK/clean" -json > "$WORK/verify.json" 2>/dev/null
 VERIFY_EXIT=$?
 set -e
 [ "$VERIFY_EXIT" -eq 3 ] || fail "verify of a corrupted file exited ${VERIFY_EXIT}, expected 3"
@@ -261,7 +312,7 @@ pass "verify catches a single flipped byte in a good-looking dataset"
 
 rm -f "$WORK/clean/docs/empty.txt"
 set +e
-"$DHOW" verify -in "$WORK/frames" -dir "$WORK/clean" -json > "$WORK/verify2.json" 2>/dev/null
+"$DHOW" verify -in "$WORK/frames" -signer "$WORK/sender.pub" -dir "$WORK/clean" -json > "$WORK/verify2.json" 2>/dev/null
 VERIFY_EXIT=$?
 set -e
 [ "$VERIFY_EXIT" -eq 3 ] || fail "verify of a damaged dataset exited ${VERIFY_EXIT}, expected 3"
@@ -271,7 +322,8 @@ pass "verify rejects a damaged dataset"
 
 # --- Determinism ---
 
-"$DHOW" send -key "$WORK/operator.key" -in "$DATA" -out "$WORK/frames-b" \
+"$DHOW" send -key "$WORK/operator.key" -identity "$WORK/sender.key" \
+    -in "$DATA" -out "$WORK/frames-b" \
     -symbol-size 1024 -blocks 8 -overhead 60 >/dev/null
 # The session id, salt, and nonce are drawn fresh per transfer by design, so
 # the frame bytes differ. What must not differ is the packed payload, which is

@@ -53,6 +53,20 @@ run_gate "cargo deny" \
 run_gate "ABI drift" \
     bash -c "'$ROOT/scripts/check_abi.sh'"
 
+# --- Wire-format gates ---
+#
+# check_spec.py has run in CI since Phase 3 and never in this gate, and
+# conformance_test.py has never run anywhere. A conformance suite nothing runs
+# is a suite that rots: its manifest checks are keyed by vector name, and when
+# the manifest went to v2 every one of them stopped matching while the suite
+# still reported PASS. Both run here now.
+
+run_gate "wire-format spec consistency" \
+    python3 "$ROOT/scripts/check_spec.py"
+
+run_gate "golden vector conformance" \
+    python3 "$ROOT/scripts/conformance_test.py"
+
 # --- Go gates ---
 #
 # The Go package links against the Rust staticlib, so the core must be built
@@ -61,6 +75,9 @@ run_gate "ABI drift" \
 
 run_gate "build rust core for cgo" \
     bash -c "cd '$CORE_DIR' && cargo build --release -p dhow-ffi"
+
+run_gate "gofmt --check" \
+    bash -c "cd '$CLI_DIR' && test -z \"\$(gofmt -l .)\" || { gofmt -l .; false; }"
 
 run_gate "go vet" \
     bash -c "cd '$CLI_DIR' && go vet ./..."

@@ -14,8 +14,9 @@ How to run a transfer across an air gap, and what to do when it does not work.
 ```
 sender                                    receiver
 ------                                    --------
-dhow keygen        (once, shared key)
-dhow send          pack, encrypt, encode
+dhow keygen        (once, shared key)  ──▶  the same operator.key
+dhow keygen -kind identity (once)      ──▶  sender.pub only
+dhow send          pack, encrypt, sign, encode
 dhow display       loop frames on screen  ──▶  camera
                                                dhow recv    capture, decode, extract
                                                dhow verify  check the dataset
@@ -32,8 +33,22 @@ a light. There is no protocol for it because there is no channel for one.
 
 ## Key ceremony
 
-Both operators need the *same* operator key. It is a symmetric secret: anyone
-holding it can read any transfer made with it.
+A transfer uses **two keys with two different jobs**, and confusing them
+defeats one of them.
+
+| File | Who holds it | What it does |
+|------|--------------|--------------|
+| `operator.key` | both operators | encrypts the payload and authenticates every frame |
+| `sender.key` | the sender, only | signs the manifest |
+| `sender.pub` | both operators | checks the sender's signature |
+
+The operator key is symmetric, so it cannot answer *who sent this*: both sides
+hold it, so either side could have produced any transfer made with it. That is
+what the identity is for. A receiver that verifies only the operator key knows
+the transfer came from someone in the group; a receiver that verifies the
+signature knows which one.
+
+### 1. The operator key
 
 ```bash
 dhow keygen -out operator.key
@@ -61,6 +76,71 @@ observer both halves.
 Rotate the key when someone who held it no longer should. There is no
 revocation: a key is either current or it is not, and only the operators know
 which.
+
+### 2. The sender's identity
+
+On the **sending** machine, once:
+
+```bash
+dhow keygen -kind identity -out sender.key
+```
+
+That writes two files and prints a fingerprint:
+
+```
+wrote signing identity to sender.key (mode 0600)
+wrote its public half to sender.pub
+fingerprint 39:5b:9b:97:82:ac:20:e5
+```
+
+`sender.key` never leaves the sending machine — not on removable media, not
+through the optical channel, not to the receiving operator. If it does, the
+signature stops meaning anything, because the person holding it can sign a
+transfer the sender never made.
+
+`sender.pub` does have to reach the receiver, and unlike the operator key it is
+not a secret: an observer who reads it learns nothing they could use. What
+matters is not that it stays hidden but that it arrives **unaltered**, because
+a receiver who is given the wrong public key will happily verify transfers from
+whoever holds the matching secret.
+
+So: carry it over, and then **compare the fingerprint out of band**. Read the
+eight groups aloud over a phone call, or match them against what `dhow send`
+prints on the sending machine — it reports the signer's fingerprint on every
+transfer:
+
+```
+session   26cd4221a95f4fc4950a1fcdb76bb3ad
+signer    39:5b:9b:97:82:ac:20:e5
+```
+
+The fingerprint is truncated and is for human comparison only. It is not an
+identifier and nothing in `dhow` makes a security decision from it; the check
+that matters is the signature over the manifest, and this is the step that
+makes sure the receiver is checking it against the right key.
+
+### If the receiver has the wrong signer
+
+`recv` and `verify` exit 3 and write nothing:
+
+```
+dhow: frames/manifest.bin does not verify against sender.pub: manifest signature
+verification failed
+either it was not produced by the holder of that identity, or it has been
+altered since it was
+```
+
+Two causes, and they need different responses. If the wrong `.pub` file was
+copied, fix the file. If the right one was copied and this still happens,
+**stop**: either the frames were altered between the two machines, or someone
+other than the sender produced them. Neither is a case for retrying.
+
+### Rotating an identity
+
+Generate a new one and distribute the new `.pub` the same way. There is no
+revocation list; an old public key stops being trusted when the receiving
+operator deletes it. Frame streams signed with the old identity stay valid
+until then, so delete it before the rotation matters rather than after.
 
 ## Choosing coding parameters
 
@@ -208,15 +288,20 @@ gap.
 
 ```bash
 # sender
-dhow send -key operator.key -in ./dataset -out ./frames \
+dhow send -key operator.key -identity ./sender.key -in ./dataset -out ./frames \
     -symbol-size 1320 -blocks 11 -overhead 60
-dhow display -in ./frames -fps 30 -qr-version 30
+dhow display -in ./frames -signer ./sender.pub -fps 30 -qr-version 30
 
 # receiver
-dhow recv -key operator.key -in ./frames -out ./received \
+dhow recv -key operator.key -signer ./sender.pub -in ./frames -out ./received \
     -state ./.dhow-state -verbose
-dhow verify -in ./frames -dir ./received
+dhow verify -in ./frames -signer ./sender.pub -dir ./received
 ```
+
+`display` takes `-signer` too, and the sender has their own `.pub` file. It
+does not need the signature to draw a QR code; it checks it so a frames
+directory damaged since it was written is caught before an operator spends
+twenty minutes in front of a screen.
 
 Always pass `-state`. A receive that runs for hours will be interrupted, and
 without it every captured frame is lost. See [RESUME.md](RESUME.md).
@@ -228,7 +313,9 @@ Always run `verify` afterwards, and again later if the dataset matters. See
 
 | Symptom | Likely cause | What to do |
 |---------|--------------|------------|
-| `recv` exits 4, zero blocks complete, high rejection count | Frames are being read but not authenticated — wrong key. | Confirm both sides used the same `operator.key`. Under `-verbose` the receiver says this outright once fifty frames have been rejected with none accepted. |
+| `recv` exits 3 before reading any frame, naming `manifest.bin` | The manifest was not signed by the identity in `-signer`, or it was altered. | Confirm the right `sender.pub` was copied and its fingerprint matches what `dhow send` printed. If it does, stop: the stream was altered or someone else produced it. |
+| `recv` exits 2 saying there is no `manifest.bin` | The frames came from a build that wrote an unsigned `transfer.json`. | Re-run `dhow send`. There is no conversion; see `proto/migration.md`. |
+| `recv` exits 4, zero blocks complete, high rejection count | Frames are being read but not authenticated — wrong key. | Confirm both sides used the same `operator.key`. This is the *operator* key, not the identity: a wrong identity fails at the manifest, before a frame is read. Under `-verbose` the receiver says this outright once fifty frames have been rejected with none accepted. |
 | `recv` exits 4, zero frames accepted at all | Nothing is being captured. | Check framing and focus. Scan the calibration pattern with a phone. |
 | `recv` exits 4, most blocks complete, one stuck | Periodic loss landing on the block period. | Change `-blocks` to a nearby prime and re-send. Raising `-overhead` will not help. |
 | `recv` exits 4, all blocks climbing slowly | Ordinary loss; the transfer is just slow. | Let it run. The stream loops. Consider a lower QR version or better lighting. |
@@ -239,7 +326,8 @@ Always run `verify` afterwards, and again later if the dataset matters. See
 | `verify` exits 3 with `content` problems | The dataset changed after extraction. | The transfer was fine; the storage was not. Re-extract from a fresh receive. |
 | `verify` exits 3 with `unexpected` problems | Something added files to the output directory. | Extract into an empty directory. |
 | `send` refuses a QR version | The symbol size does not fit. | Consult the capacity table above, or drop `-symbol-size`. |
-| `dhow` refuses to load the key | The key file is readable by others. | `chmod 600 operator.key`. |
+| `dhow` refuses to load the key | The key file is readable by others. | `chmod 600 operator.key`, or `chmod 600 sender.key` for the identity. |
+| `send` exits 2 saying there is no signing identity | The sender has not generated one, or passed `-identity` pointing at the operator key. | `dhow keygen -kind identity -out sender.key`. The two key kinds are recorded in the file and are not interchangeable. |
 
 ## Exit codes
 

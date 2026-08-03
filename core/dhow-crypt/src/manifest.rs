@@ -23,7 +23,8 @@
 //!
 //! 1. Parse: magic, version, reserved fields, CRC, entry structure, names.
 //! 2. Signature: Ed25519 over the canonical signing bytes.
-//! 3. Policy: bounds on counts and sizes, session binding, digest consistency.
+//! 3. Policy: coding-parameter sanity, bounds on counts and sizes, session
+//!    binding, digest consistency.
 
 use crate::ManifestError;
 use crate::key::{IdentityKey, PublicIdentity};
@@ -130,10 +131,38 @@ pub fn verify_manifest(
     session_id: &[u8; 16],
     policy: &Policy,
 ) -> Result<VerifiedManifest, ManifestError> {
+    verify_manifest_with(expected_signer, bytes, Some(session_id), policy)
+}
+
+/// Verifies a manifest, optionally binding it to a session already in hand.
+///
+/// `session_id` is `None` when the manifest is the receiver's *first* sight of
+/// the transfer and there is nothing yet to bind it to - which is the ordinary
+/// case for `dhow recv` and `dhow verify`, where the session identifier is
+/// taken from the manifest because the manifest is the authenticated statement
+/// of what the session is.
+///
+/// It is `Some` when the receiver already knows which session it is receiving:
+/// resuming from saved state, or having read a session header off the wire. In
+/// that case a correctly signed manifest from a *different* transfer between
+/// the same operators must not be accepted, which is what the binding rejects.
+///
+/// Passing `None` is therefore not a weaker check, it is a different one. What
+/// would be weaker is accepting a manifest whose session nobody ever compared
+/// against the frames it arrived with; that comparison belongs to the caller
+/// that holds both.
+pub fn verify_manifest_with(
+    expected_signer: &PublicIdentity,
+    bytes: &[u8],
+    session_id: Option<&[u8; 16]>,
+    policy: &Policy,
+) -> Result<VerifiedManifest, ManifestError> {
     let manifest = verify_signature(expected_signer, bytes)?;
 
     // Everything below runs only on authenticated bytes.
-    if manifest.header().session_id() != *session_id {
+    if let Some(expected) = session_id
+        && manifest.header().session_id() != *expected
+    {
         return Err(ManifestError::SessionMismatch);
     }
 
@@ -153,6 +182,18 @@ fn parse(bytes: &[u8]) -> Result<Manifest, ManifestError> {
 /// Applies the receiver's policy limits to an authenticated manifest.
 fn check_policy(manifest: &Manifest, policy: &Policy) -> Result<(), ManifestError> {
     let header = manifest.header();
+
+    // The coding parameters are now part of the signed structure, so they get
+    // checked here rather than being discovered by the decoder. A signed
+    // manifest is a statement of intent, not of competence: a sender that
+    // declares zero blocks has made a mistake, and the receiver should say so
+    // instead of handing the values to RaptorQ to reject.
+    header
+        .params()
+        .validate()
+        .map_err(|e| ManifestError::Malformed {
+            details: e.to_string(),
+        })?;
 
     if header.file_count() > policy.max_file_count {
         return Err(ManifestError::InvalidBlockCount {
@@ -226,6 +267,6 @@ fn convert_codec_error(err: dhow_codec::ManifestError) -> ManifestError {
         C::FileSizeTooLarge { size, max } => ManifestError::FileSizeTooLarge { size, max },
         C::InvalidFileCount { count } => ManifestError::InvalidBlockCount { count },
         C::SessionMismatch => ManifestError::SessionMismatch,
-        C::InvalidKey { details } => ManifestError::Malformed { details },
+        C::Malformed { details } => ManifestError::Malformed { details },
     }
 }

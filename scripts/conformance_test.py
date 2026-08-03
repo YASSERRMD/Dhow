@@ -82,6 +82,29 @@ def main():
         print(f"FAIL: Could not load vectors: {e}")
         sys.exit(1)
 
+    # A vector map keyed by name is only a check if the names are present. When
+    # the manifest went from v1 to v2 the old keys stopped matching anything
+    # and every manifest check quietly became a no-op while the suite still
+    # reported PASS. Confirm the keys exist before trusting the result.
+    present = {vector["name"] for vector in data["vectors"]}
+    required = {
+        "frame_header_v1",
+        "session_header_v1",
+        "manifest_header_v2",
+        "resume_header_v2",
+        "full_manifest_v2",
+        "full_resume_v2",
+    }
+    missing = sorted(required - present)
+    if missing:
+        print("FAIL: vectors.json is missing structures this suite checks:")
+        for name in missing:
+            print(f"  {name}")
+        print("Either the vectors were regenerated under new names, in which case")
+        print("this suite must be updated, or they were lost.")
+        sys.exit(1)
+
+
     # Check each vector
     for vector in data["vectors"]:
         name = vector["name"]
@@ -91,9 +114,9 @@ def main():
         magic_map = {
             "frame_header_v1": "DHOW",
             "session_header_v1": "DSES",
-            "manifest_header_v1": "DHMF",
+            "manifest_header_v2": "DHMF",
             "resume_header_v2": "DHRS",
-            "full_manifest_v1": "DHMF",
+            "full_manifest_v2": "DHMF",
             "full_resume_v2": "DHRS",
         }
 
@@ -105,9 +128,9 @@ def main():
             version_map = {
                 "frame_header_v1": 1,
                 "session_header_v1": 1,
-                "manifest_header_v1": 1,
+                "manifest_header_v2": 2,
                 "resume_header_v2": 2,
-                "full_manifest_v1": 1,
+                "full_manifest_v2": 2,
                 "full_resume_v2": 2,
             }
             errors = check_version(vector, name, version_map[name])
@@ -116,16 +139,17 @@ def main():
             # Check reserved fields are zero
             # Frame header: reserved at offset 6, length 2
             # Session header: reserved at offset 5, length 3
-            # Manifest header: reserved at offset 5, length 3
+            # Manifest header v2: reserved at offset 5 length 3, and at
+            # offset 158 length 2 between RaptorQ PSI and the CRC.
             # Resume header: reserved at offset 5, length 3
             # Resume v2 has a second reserved field at offset 68, so the map
             # holds every reserved span rather than only the first.
             reserved_map = {
                 "frame_header_v1": [(6, 2)],
                 "session_header_v1": [(5, 3)],
-                "manifest_header_v1": [(5, 3)],
+                "manifest_header_v2": [(5, 3), (158, 2)],
                 "resume_header_v2": [(5, 3), (68, 24)],
-                "full_manifest_v1": [(5, 3)],
+                "full_manifest_v2": [(5, 3), (158, 2)],
                 "full_resume_v2": [(5, 3), (68, 24)],
             }
 

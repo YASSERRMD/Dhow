@@ -4,8 +4,27 @@ use crate::ManifestError;
 use crate::key::IdentityKey;
 use crate::manifest::*;
 use dhow_codec::manifest::{FileEntry, Manifest, ManifestHeader, SIGNATURE_OFFSET};
+use dhow_codec::session::{RaptorQParams, SessionParams};
 
 const SESSION: [u8; 16] = [0x42; 16];
+const SALT: [u8; 32] = [0x5A; 32];
+const NONCE: [u8; 24] = [0x3C; 24];
+
+fn params() -> SessionParams {
+    SessionParams {
+        payload_size: 4096,
+        block_count: 3,
+        symbol_size: 256,
+        source_symbols_per_block: 6,
+        total_symbols_per_block: 9,
+        raptorq: RaptorQParams {
+            z: 3,
+            n: 1,
+            psi: 11,
+        },
+        payload_digest: [0x7E; 32],
+    }
+}
 
 fn entries() -> Vec<FileEntry> {
     vec![
@@ -20,7 +39,7 @@ fn total_size(entries: &[FileEntry]) -> u64 {
 
 /// Builds an unsigned manifest over `entries`.
 fn build(entries: &[FileEntry]) -> Manifest {
-    let header = ManifestHeader::new(SESSION, entries, total_size(entries));
+    let header = ManifestHeader::new(SESSION, entries, total_size(entries), SALT, NONCE, params());
     Manifest::build(&header, entries, &[0u8; 64])
 }
 
@@ -295,7 +314,7 @@ fn test_policy_rejects_declared_total_that_disagrees_with_entries() {
     // a decompression bomb, so the two must agree.
     let identity = IdentityKey::generate().unwrap();
     let e = entries();
-    let header = ManifestHeader::new(SESSION, &e, 1); // claims 1 byte, entries sum to 350
+    let header = ManifestHeader::new(SESSION, &e, 1, SALT, NONCE, params()); // claims 1 byte, entries sum to 350
     let manifest = Manifest::build(&header, &e, &[0u8; 64]);
     let bytes = sign_manifest(&identity, &manifest);
 
@@ -337,4 +356,121 @@ fn test_verification_errors_do_not_contain_file_digests() {
     let err = verify_signature(&other.public(), &bytes).unwrap_err();
     let rendered = err.to_string();
     assert!(!rendered.contains("0101"), "digest bytes leaked into error");
+}
+
+// --- v2: unbound verification and the newly-signed session fields ---
+
+#[test]
+fn unbound_verification_accepts_any_session() {
+    // dhow recv and dhow verify meet the manifest before they know anything
+    // about the session, because the manifest is what tells them.
+    let identity = IdentityKey::generate().unwrap();
+    let bytes = signed(&identity, &entries());
+
+    let verified =
+        verify_manifest_with(&identity.public(), &bytes, None, &Policy::default()).unwrap();
+    assert_eq!(verified.manifest().header().session_id(), SESSION);
+}
+
+#[test]
+fn unbound_verification_still_requires_a_valid_signature() {
+    // Skipping the session binding must not skip anything else.
+    let identity = IdentityKey::generate().unwrap();
+    let other = IdentityKey::generate().unwrap();
+    let bytes = signed(&identity, &entries());
+
+    let err = verify_manifest_with(&other.public(), &bytes, None, &Policy::default()).unwrap_err();
+    assert!(matches!(err, ManifestError::SignatureVerificationFailed));
+}
+
+#[test]
+fn bound_verification_rejects_a_replayed_session() {
+    let identity = IdentityKey::generate().unwrap();
+    let bytes = signed(&identity, &entries());
+
+    let other_session = [0x99u8; 16];
+    let err = verify_manifest_with(
+        &identity.public(),
+        &bytes,
+        Some(&other_session),
+        &Policy::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, ManifestError::SessionMismatch));
+}
+
+#[test]
+fn the_salt_and_nonce_survive_verification() {
+    let identity = IdentityKey::generate().unwrap();
+    let bytes = signed(&identity, &entries());
+
+    let verified =
+        verify_manifest_with(&identity.public(), &bytes, None, &Policy::default()).unwrap();
+    assert_eq!(verified.manifest().header().salt(), SALT);
+    assert_eq!(verified.manifest().header().nonce(), NONCE);
+    assert_eq!(verified.manifest().header().params(), params());
+}
+
+#[test]
+fn tampering_with_any_signed_byte_fails_verification() {
+    // The whole point of folding the session fields in: changing one has to
+    // break the signature, not merely produce a decryption failure later.
+    let identity = IdentityKey::generate().unwrap();
+    let good = signed(&identity, &entries());
+
+    // Every byte outside the signature field itself. Bytes inside it are
+    // covered by test_signature_field_mutation_fails.
+    let offsets: Vec<usize> = (0..SIGNATURE_OFFSET)
+        .chain(SIGNATURE_OFFSET + SIGNATURE_LEN..good.len())
+        .collect();
+    assert!(offsets.len() > 200, "the sweep is not covering the header");
+
+    for offset in offsets {
+        let mut bytes = good.clone();
+        bytes[offset] = bytes[offset].wrapping_add(1);
+        assert!(
+            verify_manifest_with(&identity.public(), &bytes, None, &Policy::default()).is_err(),
+            "a flipped byte at offset {offset} verified"
+        );
+    }
+}
+
+#[test]
+fn a_signed_manifest_with_impossible_parameters_is_rejected() {
+    // A signature says who produced the manifest, not that they were right.
+    let identity = IdentityKey::generate().unwrap();
+    let e = entries();
+
+    let mut broken = params();
+    broken.block_count = 0;
+    let header = ManifestHeader::new(SESSION, &e, total_size(&e), SALT, NONCE, broken);
+    let bytes = sign_manifest(&identity, &Manifest::build(&header, &e, &[0u8; 64]));
+
+    let err =
+        verify_manifest_with(&identity.public(), &bytes, None, &Policy::default()).unwrap_err();
+    assert!(
+        matches!(err, ManifestError::Malformed { .. }),
+        "zero blocks was rejected as {err:?}"
+    );
+}
+
+#[test]
+fn the_executable_bit_is_authenticated() {
+    let identity = IdentityKey::generate().unwrap();
+    let e = vec![FileEntry::with_mode("run.sh", 12, [3u8; 32], true)];
+    let header = ManifestHeader::new(SESSION, &e, total_size(&e), SALT, NONCE, params());
+    let bytes = sign_manifest(&identity, &Manifest::build(&header, &e, &[0u8; 64]));
+
+    let verified =
+        verify_manifest_with(&identity.public(), &bytes, None, &Policy::default()).unwrap();
+    assert!(verified.manifest().entries()[0].executable);
+
+    // Clearing the flag byte on the wire must not verify.
+    let mut cleared = bytes.clone();
+    let flags_at = cleared.len() - 1;
+    cleared[flags_at] = 0;
+    assert!(
+        verify_manifest_with(&identity.public(), &cleared, None, &Policy::default()).is_err(),
+        "clearing the executable bit verified"
+    );
 }

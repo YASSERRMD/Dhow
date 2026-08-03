@@ -170,3 +170,4 @@ jobs:
           python-version: '3.12'
       - run: python3 scripts/gen_vectors.py
       - run: python3 scripts/check_spec.py
+      - run: python3 scripts/conformance_test.py

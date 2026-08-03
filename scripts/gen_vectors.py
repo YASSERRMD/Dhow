@@ -169,45 +169,91 @@ def generate_session_header_vector() -> dict:
     }
 
 
-def generate_manifest_header_vector() -> dict:
-    """Generate a golden vector for a manifest header."""
-    magic = b"DHMF"
-    version = 0x01
-    reserved = b"\x00\x00\x00"
-    session_id = TEST_SESSION_ID
-    file_count = 0x00000002
-    total_size = 0x00002000  # 8192 bytes
-    payload_digest = TEST_PAYLOAD_DIGEST
-    reserved2 = b"\x00" * 32
+# Session material carried in a v2 manifest. Fixed values, so the vector is
+# reproducible; none of them is secret.
+MANIFEST_SALT = bytes(range(0x40, 0x60))
+MANIFEST_NONCE = bytes(range(0x80, 0x98))
+MANIFEST_PAYLOAD_SIZE = 0x0000000000010000
+MANIFEST_BLOCK_COUNT = 0x00000004
+MANIFEST_SYMBOL_SIZE = 0x00000100
+MANIFEST_SOURCE_SYMBOLS = 0x00000040
+MANIFEST_TOTAL_SYMBOLS = 0x00000060
+MANIFEST_RQ_Z = 0x00000001
+MANIFEST_RQ_N = 0x00000001
+MANIFEST_RQ_PSI = 0x0001
 
-    # Build header (without CRC and signature)
-    header_no_crc = (
-        magic
-        + struct.pack("<B", version)
-        + reserved
-        + session_id
+
+def manifest_header_no_crc(file_count: int, total_size: int) -> bytes:
+    """Build a v2 manifest header up to but not including the CRC field.
+
+    Shared by the header vector and the full-manifest vector, because two
+    copies of a 160-byte layout drift and the drift is invisible until a
+    conformance run on someone else's implementation fails.
+    """
+    return (
+        b"DHMF"
+        + struct.pack("<B", 0x02)
+        + b"\x00\x00\x00"
+        + TEST_SESSION_ID
         + struct.pack("<I", file_count)
         + struct.pack("<Q", total_size)
-        + payload_digest
-        + reserved2
+        + TEST_PAYLOAD_DIGEST
+        + MANIFEST_SALT
+        + MANIFEST_NONCE
+        + struct.pack("<Q", MANIFEST_PAYLOAD_SIZE)
+        + struct.pack("<I", MANIFEST_BLOCK_COUNT)
+        + struct.pack("<I", MANIFEST_SYMBOL_SIZE)
+        + struct.pack("<I", MANIFEST_SOURCE_SYMBOLS)
+        + struct.pack("<I", MANIFEST_TOTAL_SYMBOLS)
+        + struct.pack("<I", MANIFEST_RQ_Z)
+        + struct.pack("<I", MANIFEST_RQ_N)
+        + struct.pack("<H", MANIFEST_RQ_PSI)
+        + b"\x00\x00"
     )
 
+
+def manifest_file_entry(name: bytes, size: int, digest: bytes, executable: bool) -> bytes:
+    """Build a v2 manifest file entry."""
+    return (
+        struct.pack("<H", len(name))
+        + name
+        + struct.pack("<Q", size)
+        + digest
+        + struct.pack("<B", 1 if executable else 0)
+    )
+
+
+def generate_manifest_header_vector() -> dict:
+    """Generate a golden vector for a manifest header."""
+    file_count = 0x00000002
+    total_size = 0x00002000  # 8192 bytes
+
+    header_no_crc = manifest_header_no_crc(file_count, total_size)
     crc = crc32c(header_no_crc)
     signature = TEST_SIGNATURE
     header = header_no_crc + struct.pack("<I", crc) + signature
 
     return {
-        "name": "manifest_header_v1",
-        "description": "Golden vector for manifest header v1",
+        "name": "manifest_header_v2",
+        "description": "Golden vector for manifest header v2",
         "inputs": {
             "magic": "DHMF",
-            "version": 1,
+            "version": 2,
             "reserved": 0,
-            "session_id": session_id.hex(),
+            "session_id": TEST_SESSION_ID.hex(),
             "file_count": file_count,
             "total_size": total_size,
-            "payload_digest": payload_digest.hex(),
-            "reserved2": reserved2.hex(),
+            "payload_digest": TEST_PAYLOAD_DIGEST.hex(),
+            "salt": MANIFEST_SALT.hex(),
+            "nonce": MANIFEST_NONCE.hex(),
+            "payload_size": MANIFEST_PAYLOAD_SIZE,
+            "block_count": MANIFEST_BLOCK_COUNT,
+            "symbol_size": MANIFEST_SYMBOL_SIZE,
+            "source_symbols_per_block": MANIFEST_SOURCE_SYMBOLS,
+            "total_symbols_per_block": MANIFEST_TOTAL_SYMBOLS,
+            "raptorq_z": MANIFEST_RQ_Z,
+            "raptorq_n": MANIFEST_RQ_N,
+            "raptorq_psi": MANIFEST_RQ_PSI,
             "signature": signature.hex(),
         },
         "outputs": {
@@ -274,22 +320,20 @@ def generate_file_entry_vector() -> dict:
     name_length = len(name)
     file_size = 0x0000000000000100  # 256 bytes
     file_digest = TEST_PAYLOAD_DIGEST
+    executable = True
 
-    entry = (
-        struct.pack("<H", name_length)
-        + name
-        + struct.pack("<Q", file_size)
-        + file_digest
-    )
+    entry = manifest_file_entry(name, file_size, file_digest, executable)
 
     return {
-        "name": "manifest_file_entry_v1",
-        "description": "Golden vector for manifest file entry v1",
+        "name": "manifest_file_entry_v2",
+        "description": "Golden vector for manifest file entry v2",
         "inputs": {
             "name": name.decode("utf-8"),
             "name_length": name_length,
             "file_size": file_size,
             "file_digest": file_digest.hex(),
+            "flags": 1,
+            "executable": executable,
         },
         "outputs": {
             "entry_hex": entry.hex(),
@@ -334,62 +378,40 @@ def generate_block_entry_vector() -> dict:
 
 def generate_full_manifest_vector() -> dict:
     """Generate a golden vector for a full manifest with file entries."""
-    magic = b"DHMF"
-    version = 0x01
-    reserved = b"\x00\x00\x00"
-    session_id = TEST_SESSION_ID
     file_count = 0x00000002
     total_size = 0x00002000  # 8192 bytes
-    payload_digest = TEST_PAYLOAD_DIGEST
-    reserved2 = b"\x00" * 32
 
-    # Build header (without CRC and signature)
-    header_no_crc = (
-        magic
-        + struct.pack("<B", version)
-        + reserved
-        + session_id
-        + struct.pack("<I", file_count)
-        + struct.pack("<Q", total_size)
-        + payload_digest
-        + reserved2
-    )
-
+    header_no_crc = manifest_header_no_crc(file_count, total_size)
     crc = crc32c(header_no_crc)
     signature = TEST_SIGNATURE
 
-    # Build file entries
+    # One entry of each flag value, so a reader that ignores the flag byte or
+    # reads it at the wrong offset fails on this vector rather than passing.
     name1 = b"file1.txt"
     name2 = b"file2.txt"
-    file_entry1 = (
-        struct.pack("<H", len(name1))
-        + name1
-        + struct.pack("<Q", 0x0000000000001000)
-        + TEST_PAYLOAD_DIGEST
-    )
-    file_entry2 = (
-        struct.pack("<H", len(name2))
-        + name2
-        + struct.pack("<Q", 0x0000000000001000)
-        + TEST_PAYLOAD_DIGEST
-    )
+    file_entry1 = manifest_file_entry(name1, 0x1000, TEST_PAYLOAD_DIGEST, False)
+    file_entry2 = manifest_file_entry(name2, 0x1000, TEST_PAYLOAD_DIGEST, True)
 
     full_manifest = header_no_crc + struct.pack("<I", crc) + signature + file_entry1 + file_entry2
 
     return {
-        "name": "full_manifest_v1",
-        "description": "Golden vector for full manifest with file entries v1",
+        "name": "full_manifest_v2",
+        "description": "Golden vector for full manifest with file entries v2",
         "inputs": {
             "magic": "DHMF",
-            "version": 1,
-            "session_id": session_id.hex(),
+            "version": 2,
+            "session_id": TEST_SESSION_ID.hex(),
             "file_count": file_count,
             "total_size": total_size,
-            "payload_digest": payload_digest.hex(),
+            "payload_digest": TEST_PAYLOAD_DIGEST.hex(),
+            "salt": MANIFEST_SALT.hex(),
+            "nonce": MANIFEST_NONCE.hex(),
             "signature": signature.hex(),
             "file_entries": [
-                {"name": name1.decode("utf-8"), "size": 0x1000, "digest": TEST_PAYLOAD_DIGEST.hex()},
-                {"name": name2.decode("utf-8"), "size": 0x1000, "digest": TEST_PAYLOAD_DIGEST.hex()},
+                {"name": name1.decode("utf-8"), "size": 0x1000,
+                 "digest": TEST_PAYLOAD_DIGEST.hex(), "executable": False},
+                {"name": name2.decode("utf-8"), "size": 0x1000,
+                 "digest": TEST_PAYLOAD_DIGEST.hex(), "executable": True},
             ],
         },
         "outputs": {

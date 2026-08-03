@@ -11,11 +11,17 @@ Under active development, built phase by phase; see
 [docs/phase-log.md](docs/phase-log.md) for what each phase delivered and what
 it found.
 
-`dhow` is a runnable binary today. It performs a complete encrypted transfer -
-`keygen`, `send`, `display`, `recv`, `verify` - with the payload encrypted and
-authenticated before it is ever framed, fountain-coded so a lossy optical
-channel still completes, resumable if the receiver is interrupted, and
-verifiable against a per-file inventory long after the fact.
+`dhow` is a runnable binary today. It performs a complete encrypted, signed
+transfer - `keygen`, `send`, `display`, `recv`, `verify` - with the payload
+encrypted and authenticated before it is ever framed, fountain-coded so a lossy
+optical channel still completes, resumable if the receiver is interrupted, and
+verifiable against a signed per-file inventory long after the fact.
+
+A transfer uses two keys. The **operator key** is symmetric and shared by both
+sides; it encrypts. The sender's **identity key** stays on the sending machine
+and signs the manifest, so a receiver can tell a transfer the sender made from
+one anybody holding the shared key could have made. `recv` and `verify` read
+nothing out of a transfer before checking that signature.
 
 **Not yet built:** camera capture and QR detection. Frames currently move
 between the two halves through a directory, which exercises everything above
@@ -25,7 +31,7 @@ tool you can test end to end but not yet run across a real air gap.
 ## Documentation
 
 - [Operations Guide](docs/OPERATIONS.md) — setup, parameters, troubleshooting,
-  key ceremony
+  the two-key ceremony
 - [Resuming an Interrupted Receive](docs/RESUME.md)
 - [Verifying a Received Dataset](docs/VERIFY.md)
 - [Threat Model](docs/THREAT-MODEL.md)

@@ -1,17 +1,38 @@
 # Format Changelog
 
-> Version 1.1
+> Version 2.0
 
-## Transfer record v2 - 2026-08-03
+## v2.0 - 2026-08-03
 
-The transfer record is not part of `proto/`: it is a stand-in the CLI writes
-alongside the frames until the signed manifest travels in the frame stream. It
-is noted here so the two are not confused.
+### Changed
 
-Version 2 adds a per-file inventory - name, size, executable bit, and content
-digest - which is what `dhow verify` checks an extracted dataset against. A
-version 1 record is rejected: it carries no inventory, so verifying against it
-would be the file count the inventory exists to replace.
+- Manifest format bumped to v2. The fixed header grows from 168 to 228 bytes:
+  the 32 reserved bytes at offset 68 become the HKDF salt, and 92 new bytes
+  carry the nonce, payload size, and the full coding parameter set. The CRC32C
+  moves from 100 to 160 and the signature from 104 to 164.
+- Manifest file entries grow from 42+name to 43+name bytes, gaining a flag byte
+  whose bit 0 is the owner execute bit.
+- The manifest's payload digest is now what the spec always said it was: BLAKE3
+  of the encrypted payload. v1 shipped a digest of the concatenated per-file
+  digests, which is a different value that no receiver could check against
+  anything it had.
+
+### Removed
+
+- The CLI's `transfer.json` transfer record. It was a stand-in for the signed
+  manifest and was never part of `proto/`; it is deleted rather than versioned,
+  because everything it carried is now in the manifest and signed.
+
+### Breaking changes
+
+- A v1 manifest is rejected by a v2 receiver, and a v2 manifest by a v1
+  receiver. There is no conversion; see `proto/migration.md`.
+
+### Notes
+
+- This is the first change to a format that crosses the optical channel, so
+  unlike the v1.1 resume change it is not local: a v1 sender and a v2 receiver
+  do not interoperate. Both operators upgrade together.
 
 ## v1.1 - 2026-08-03
 
