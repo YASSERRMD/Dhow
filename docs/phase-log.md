@@ -1,5 +1,143 @@
 # Phase Log
 
+## Phase 30 - Property and differential testing
+
+**Objective:** the property tests in this tree are uneven. `dhow-codec` has had
+them since Phase 5; `dhow-crypt` has had none, which is the wrong way round,
+because the codec's failure mode is a dataset that does not reassemble and the
+crypt crate's is a dataset that reassembles into something an attacker chose.
+And nothing has ever compared the Go-driven ABI path against the Rust library
+path on the same inputs, so a bug in how bytes cross that boundary would show up
+as a failed transfer somewhere else entirely. This phase adds both.
+
+**Gates:** properties over what each crate composes rather than over the
+primitives it imports; a differential harness whose two sides do not share the
+code under test, shown to bite; `scripts/gate.sh` stays green.
+
+### The differential is a boundary differential, and says so
+
+`core/dhow-ffi/examples/reference.rs` runs the encode and decode through the
+Rust **library**. It deliberately calls no `extern "C"` function, because a
+differential test whose two sides share the code under test proves nothing.
+`cli/internal/ffi/differential_test.go` runs the same inputs through the C ABI
+and cgo, and the two must agree on the frames byte for byte, on the resolved
+payload size and digest, and on the decoded plaintext.
+
+What that catches is a bug **in the boundary**: a truncated buffer, a length
+read at the wrong width, a struct field that does not line up, a slice that
+outlived its pin. That is the class of bug a hand-written ABI produces.
+
+What it cannot catch is a bug in RaptorQ or in the AEAD, because both sides
+would have the same bug. Both files say so in their own opening comment, because
+a differential test is easy to mistake for a stronger guarantee than it gives.
+
+**The key crosses as a file path, not as bytes.** No function in this ABI takes
+raw key material, by design, so Go has no way to hand the reference the same key
+except through a key file. A reference that wanted hex would have forced a hole
+in exactly the property the ABI exists to keep. Both sides call
+`load_operator` on the same file.
+
+**Inputs come from AES-CTR over zeroes, not `math/rand`.** A generator whose
+sequence changes with the Go version would make a failure reproduce on one
+toolchain and not another, which is the one thing a differential test's inputs
+must not do. The chaos harness draws its datasets the same way, for the same
+reason.
+
+Forty-eight jobs: eleven fixed edge sizes - 0, 1, 63, 64, 65, 255, 256, 257,
+1024, 4096, 4097 - then random sizes across six symbol sizes and five block
+counts.
+
+**Shown to bite.** Adding one to the reference's `total_symbols_per_block` made
+job 0 fail immediately:
+
+```
+--- FAIL: TestGoFFIPathMatchesPureRustPath (2.40s)
+    differential_test.go:355: job 0 (edge size 0): 3 frames across the ABI, 4 in Rust
+```
+
+### Properties, not examples
+
+Twenty-eight new properties across the two crates. The distinction that matters:
+an example says "this input produced this output on the day it was written"; a
+property says "no input produces X". Both are worth having and only the second
+covers the case nobody thought of.
+
+**`dhow-crypt`, nineteen properties.** What is deliberately *not* tested is the
+primitives: XChaCha20-Poly1305, HKDF-BLAKE3, and Ed25519 come from audited
+crates and are not reimplemented here, so testing that ChaCha20 is ChaCha20
+would be testing someone else's code with a worse harness. What is tested is how
+this crate composes them:
+
+- the session id is genuinely bound into the ciphertext, so a recording of an
+  earlier transfer under the same operator key does not decrypt;
+- a different salt really does change the derivation, which is what makes
+  carrying it in the manifest worth anything;
+- the payload key and the session key are never equal, so a frame MAC is never
+  computed under the key protecting the data;
+- every altered byte of a ciphertext *fails* rather than decrypting to something
+  else;
+- every altered byte of a signed manifest fails verification - chosen by the
+  strategy rather than sampled at fixed offsets, so a field somebody forgot to
+  sign is found rather than assumed absent;
+- and no `Debug` impl ever emits four consecutive bytes of a secret.
+
+That last one is a property rather than an example on purpose. Debug output
+reaches logs, panic messages, and error strings; a key that appeared in one has
+already left the machine, and no test written afterwards can recall it.
+
+**`dhow-codec`, nine properties over the pipeline.** `pipeline_test.rs` covers
+the same ground thoroughly with examples, and every one of them pins a single
+point in a space with three dimensions: a specific payload, a 64-byte symbol,
+one or two blocks. The defects that survive an example suite live at the
+combinations nobody wrote down - a payload that divides evenly by the symbol
+size but not by the block count, a final block one byte long, a symbol size that
+leaves a single byte of padding. The properties vary payload size, symbol size,
+block count, and repair overhead together:
+
+- order does not matter, and duplicates change nothing (the display loops, so
+  the receiver sees every frame many times in an order the sender never chose);
+- a frame from another session, or under another key, is never accepted - not
+  "usually rejected";
+- a corrupt frame never poisons a decode that would otherwise succeed, which is
+  the property that makes a lossy optical channel usable at all;
+- every single-byte mutation and every truncation is rejected;
+- and no frame exceeds the size its parameters promise, which is what the QR
+  capacity table an operator picks a version from depends on.
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+=== GATE SUMMARY ===
+  Passed:  19
+  Failed:  0
+  Skipped: 0
+ALL GATES PASSED
+```
+
+Test counts from the same run:
+
+```
+test result: ok. 300 passed; 0 failed  (dhow-codec, was 291)
+test result: ok. 129 passed; 0 failed  (dhow-crypt, was 110)
+test result: ok.  11 passed; 0 failed  (dhow-crypt end_to_end)
+test result: ok.  44 passed; 0 failed  (dhow-ffi)
+ok  dhow/cli/internal/ffi  3.755s       (includes the differential)
+```
+
+### Deviation: 4 atomic commits, not 20
+
+This is a large shortfall and it is not disguised. The phase is four things -
+a reference binary, a Go differential harness, a crypt property suite, a codec
+property suite - and each is a single file that does one thing. There is no
+honest split: half a property suite is not a commit that does one logical
+change, it is the same change interrupted.
+
+The floor exists to stop a day of work landing as one commit. That is not what
+happened here; what happened is that a test-only phase produces fewer, larger,
+self-contained files than a phase that changes a wire format. Recorded rather
+than padded, as `temp/git_instruction.md` requires.
+
 ## Phase 29 - Fuzzing the parsers
 
 **Objective:** B-4 has been open since Phase 2 with the note "specified and not
