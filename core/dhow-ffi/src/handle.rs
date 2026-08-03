@@ -17,6 +17,9 @@ use crate::error::{DhowStatus, clear_last_error, fail};
 use crate::guard::{guard, guard_ptr};
 use dhow_codec::blake3::blake3_digest;
 use dhow_codec::pipeline::{Pipeline, PipelineDecoder};
+use dhow_codec::qr::{
+    Ecc, QrCodeEncoder, capacity as qr_capacity, max_symbol_size as qr_max_symbol_size,
+};
 use dhow_codec::session::{RaptorQParams, SessionParams};
 use dhow_crypt::aead::{TransferKeys, decrypt_payload, encrypt_payload};
 use dhow_crypt::kdf::Salt;
@@ -656,4 +659,101 @@ pub unsafe extern "C" fn dhow_decoder_free(decoder: *mut DhowDecoder) {
     // SAFETY: the caller guarantees `decoder` came from `Box::into_raw` here
     // and has not already been freed.
     drop(unsafe { Box::from_raw(decoder) });
+}
+
+// --- QR encoding ---
+
+/// Reports how many bytes one QR code holds at `version` and `ecc`.
+///
+/// `ecc` is the ASCII letter `L`, `M`, `Q`, or `H`. Returns a negative status
+/// on invalid input.
+#[unsafe(no_mangle)]
+pub extern "C" fn dhow_qr_capacity(version: u8, ecc: c_char) -> c_int {
+    let Some(level) = Ecc::from_letter(ecc as u8 as char) else {
+        return DhowStatus::InvalidArgument as c_int;
+    };
+    match qr_capacity(version, level) {
+        Ok(n) => n as c_int,
+        Err(_) => DhowStatus::InvalidArgument as c_int,
+    }
+}
+
+/// Reports the largest codec symbol size that still fits one QR code.
+///
+/// Returns 0 when the version is too small to hold even a frame header, or a
+/// negative status on invalid input. A caller uses this to choose a symbol
+/// size the optical layer can actually carry, rather than picking one and
+/// discovering at render time that frames do not fit.
+#[unsafe(no_mangle)]
+pub extern "C" fn dhow_qr_max_symbol_size(version: u8, ecc: c_char) -> c_int {
+    let Some(level) = Ecc::from_letter(ecc as u8 as char) else {
+        return DhowStatus::InvalidArgument as c_int;
+    };
+    match qr_max_symbol_size(version, level) {
+        Ok(Some(n)) => n as c_int,
+        Ok(None) => 0,
+        Err(_) => DhowStatus::InvalidArgument as c_int,
+    }
+}
+
+/// Encodes one frame as a QR code and writes its module grid.
+///
+/// The grid is one byte per module, row-major, 1 for dark. `size` receives the
+/// number of modules per side, so the caller knows the grid is `size * size`
+/// bytes.
+///
+/// Call with a null `buf` to learn the required size. Pass `version` 0 to let
+/// the encoder choose the smallest version that fits.
+///
+/// # Safety
+///
+/// `frame` must point to `frame_len` readable bytes; `buf` must be null or
+/// point to `len` writable bytes; `size` and `written` must be null or
+/// writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_qr_encode_frame(
+    frame: *const u8,
+    frame_len: usize,
+    version: u8,
+    ecc: c_char,
+    buf: *mut u8,
+    len: usize,
+    size: *mut u32,
+    written: *mut usize,
+) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+
+        let Some(level) = Ecc::from_letter(ecc as u8 as char) else {
+            return fail(
+                DhowStatus::InvalidArgument,
+                "error-correction level must be L, M, Q, or H",
+            );
+        };
+
+        // SAFETY: forwarded from this function's own contract.
+        let Some(frame) = (unsafe { slice_from(frame, frame_len) }) else {
+            return fail(DhowStatus::NullArgument, "frame pointer was null");
+        };
+
+        let encoded = if version == 0 {
+            QrCodeEncoder::encode_with(frame, level)
+        } else {
+            QrCodeEncoder::encode_at(frame, version, level)
+        };
+
+        let qr = match encoded {
+            Ok(qr) => qr,
+            Err(e) => return fail(DhowStatus::InvalidArgument, e.to_string()),
+        };
+
+        if !size.is_null() {
+            // SAFETY: caller guarantees `size` is null or writable.
+            unsafe { *size = qr.size() as u32 };
+        }
+
+        let modules = qr.to_modules();
+        // SAFETY: forwarded from this function's own contract.
+        unsafe { write_out(&modules, buf, len, written) }
+    })
 }

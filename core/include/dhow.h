@@ -368,6 +368,49 @@ DhowStatus dhow_decoder_finish(const DhowDecoder *decoder,
  */
 void dhow_decoder_free(DhowDecoder *decoder);
 
+/**
+ * Reports how many bytes one QR code holds at `version` and `ecc`.
+ *
+ * `ecc` is the ASCII letter `L`, `M`, `Q`, or `H`. Returns a negative status
+ * on invalid input.
+ */
+int dhow_qr_capacity(uint8_t version, char ecc);
+
+/**
+ * Reports the largest codec symbol size that still fits one QR code.
+ *
+ * Returns 0 when the version is too small to hold even a frame header, or a
+ * negative status on invalid input. A caller uses this to choose a symbol
+ * size the optical layer can actually carry, rather than picking one and
+ * discovering at render time that frames do not fit.
+ */
+int dhow_qr_max_symbol_size(uint8_t version, char ecc);
+
+/**
+ * Encodes one frame as a QR code and writes its module grid.
+ *
+ * The grid is one byte per module, row-major, 1 for dark. `size` receives the
+ * number of modules per side, so the caller knows the grid is `size * size`
+ * bytes.
+ *
+ * Call with a null `buf` to learn the required size. Pass `version` 0 to let
+ * the encoder choose the smallest version that fits.
+ *
+ * # Safety
+ *
+ * `frame` must point to `frame_len` readable bytes; `buf` must be null or
+ * point to `len` writable bytes; `size` and `written` must be null or
+ * writable.
+ */
+DhowStatus dhow_qr_encode_frame(const uint8_t *frame,
+                                uintptr_t frame_len,
+                                uint8_t version,
+                                char ecc,
+                                uint8_t *buf,
+                                uintptr_t len,
+                                uint32_t *size,
+                                uintptr_t *written);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus
