@@ -4,4 +4,5 @@
 - [Resuming an Interrupted Receive](RESUME.md)
 - [Verifying a Received Dataset](VERIFY.md)
 - [Operations Guide](OPERATIONS.md)
+- [Operator UX Review](UX-REVIEW.md)
 - [Phase Log](phase-log.md)

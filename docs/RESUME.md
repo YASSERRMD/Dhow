@@ -1,5 +1,7 @@
 # Resuming an Interrupted Receive
 
+> Part of the [Operations Guide](OPERATIONS.md).
+
 A capture that runs for an hour will be interrupted: the operator stops it, the
 machine is rebooted, the process is killed. Without saved progress, every frame
 captured so far is lost and the sender has to run the whole stream again.

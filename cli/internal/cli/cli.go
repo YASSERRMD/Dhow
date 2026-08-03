@@ -144,9 +144,21 @@ Commands:
 
 Run "dhow <command> -h" for the flags of a command.
 
-Exit codes:
-  0 success   1 usage   2 input   3 verification failed
-  4 incomplete   5 internal
+Common flags:
+  -json      machine-readable output on stdout
+  -quiet     print nothing but errors
+  -verbose   print progress and detail while working
+
+Exit codes (stable; a script may branch on these):
+  0  success
+  1  usage: a flag or argument was wrong
+  2  input: a file was missing, unreadable, or malformed
+  3  verification failed: a digest, MAC, or signature did not match
+  4  incomplete: not enough frames arrived; show the stream again
+  5  internal: a bug in dhow
+
+Only 4 is worth retrying unchanged. 2 and 3 mean something on disk is wrong,
+and repeating the command will reproduce them.
 `)
 }
 
@@ -156,6 +168,59 @@ func newFlagSet(name string, env Env) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(env.Stderr)
 	return fs
+}
+
+// verbosity controls how much a command says while it works.
+//
+// It governs commentary only. Results still go to stdout and errors still go
+// to stderr at every level, because a script that pipes one and reads the
+// other must not have its data silenced by a display preference. -quiet
+// suppresses the summary a person reads; it never suppresses a failure.
+type verbosity int
+
+const (
+	// quiet prints nothing but errors. An exit code is the whole report.
+	quiet verbosity = iota - 1
+	// normal prints the end-of-command summary.
+	normal
+	// loud adds progress and detail while the command runs.
+	loud
+)
+
+// verbosityFlags registers -quiet and -verbose on a flag set.
+//
+// Returns a function that resolves them after parsing, because the two can be
+// given together and something has to decide what that means.
+func verbosityFlags(fs *flag.FlagSet) func() (verbosity, error) {
+	q := fs.Bool("quiet", false, "print nothing but errors")
+	v := fs.Bool("verbose", false, "print progress and detail while working")
+	return func() (verbosity, error) {
+		switch {
+		case *q && *v:
+			// Guessing which one the operator meant would make the tool
+			// unpredictable in exactly the situation where they are already
+			// unsure what it is doing.
+			return normal, errors.New("-quiet and -verbose contradict each other; pass at most one")
+		case *q:
+			return quiet, nil
+		case *v:
+			return loud, nil
+		default:
+			return normal, nil
+		}
+	}
+}
+
+// say writes commentary at or above the given level.
+//
+// Commentary goes to stderr so stdout carries only results, which is what lets
+// `dhow send -json | jq` work while a person still sees what happened.
+func (v verbosity) say(w io.Writer, level verbosity, format string, args ...any) {
+	if v < level {
+		return
+	}
+	// Commentary that cannot be written is not worth failing a transfer over.
+	_, _ = fmt.Fprintf(w, format, args...)
 }
 
 // emit writes a result as JSON or as human-readable lines.
@@ -181,7 +246,12 @@ func runKeygen(env Env, args []string) error {
 	out := fs.String("out", "operator.key", "path to write the operator key to")
 	force := fs.Bool("force", false, "overwrite an existing key file")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	resolve := verbosityFlags(fs)
 	if err := fs.Parse(args); err != nil {
+		return &exitError{code: ExitUsage, err: err}
+	}
+	level, err := resolve()
+	if err != nil {
 		return &exitError{code: ExitUsage, err: err}
 	}
 
@@ -193,6 +263,8 @@ func runKeygen(env Env, args []string) error {
 		}
 	}
 
+	level.say(env.Stderr, loud, "drawing a key from the system CSPRNG\n")
+
 	key, err := ffi.GenerateKey()
 	if err != nil {
 		return failf(ExitInternal, "generating key: %w", err)
@@ -203,10 +275,46 @@ func runKeygen(env Env, args []string) error {
 		return failf(ExitInput, "writing %s: %w", *out, err)
 	}
 
+	if level == quiet && !*asJSON {
+		return nil
+	}
 	return emit(env.Stdout, *asJSON,
 		keygenResult{Path: *out, Mode: "0600"},
 		fmt.Sprintf("wrote operator key to %s (mode 0600)\n"+
 			"keep this file secret; both operators need the same key\n", *out))
+}
+
+
+// loadKey opens the operator key, turning the core's diagnosis into an
+// instruction.
+//
+// The two ways this fails in practice are a path that is wrong and a file
+// whose permissions are wrong, and the fix for each is a single command. An
+// operator reading "invalid key data: cannot stat key file" has been told what
+// happened and not what to do about it, which is the difference between an
+// error message and a useful one.
+func loadKey(path string) (*ffi.Key, error) {
+	key, err := ffi.LoadKey(path)
+	if err == nil {
+		return key, nil
+	}
+
+	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+		return nil, failf(ExitInput,
+			"no operator key at %s; generate one with \"dhow keygen -out %s\", "+
+				"or pass -key with the path to the key both operators share",
+			path, path)
+	}
+
+	if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm()&0o077 != 0 {
+		return nil, failf(ExitInput,
+			"%s is readable by other users (mode %04o); dhow refuses to load a key "+
+				"anyone else can read. Fix it with \"chmod 600 %s\", and consider the "+
+				"key compromised if the machine is shared",
+			path, info.Mode().Perm(), path)
+	}
+
+	return nil, failf(ExitInput, "loading %s: %w", path, err)
 }
 
 // --- send ---
@@ -272,7 +380,12 @@ func runSend(env Env, args []string) error {
 	qrScale := fs.Uint("qr-scale", 8, "PNG pixels per QR module")
 	emitQR := fs.Bool("qr", false, "also render each frame as a QR code PNG")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	resolve := verbosityFlags(fs)
 	if err := fs.Parse(args); err != nil {
+		return &exitError{code: ExitUsage, err: err}
+	}
+	level, err := resolve()
+	if err != nil {
 		return &exitError{code: ExitUsage, err: err}
 	}
 	if *in == "" {
@@ -287,6 +400,8 @@ func runSend(env Env, args []string) error {
 		return failf(ExitUsage, "%s is not a directory", *in)
 	}
 
+	level.say(env.Stderr, loud, "packing %s\n", *in)
+
 	var archive strings.Builder
 	entries, err := pack.Create(&archive, *in)
 	if err != nil {
@@ -294,9 +409,9 @@ func runSend(env Env, args []string) error {
 	}
 	payload := []byte(archive.String())
 
-	key, err := ffi.LoadKey(*keyPath)
+	key, err := loadKey(*keyPath)
 	if err != nil {
-		return failf(ExitInput, "loading %s: %w", *keyPath, err)
+		return err
 	}
 	defer key.Close()
 
@@ -320,6 +435,9 @@ func runSend(env Env, args []string) error {
 	}
 	defer enc.Close()
 
+	level.say(env.Stderr, loud, "packed %d files into %d bytes; encoding\n",
+		len(entries), archive.Len())
+
 	frames, err := enc.Frames()
 	if err != nil {
 		return failf(ExitInternal, "reading frames: %w", err)
@@ -338,6 +456,8 @@ func runSend(env Env, args []string) error {
 			return failf(ExitInput, "writing %s: %w", name, err)
 		}
 	}
+
+	level.say(env.Stderr, loud, "wrote %d frames to %s\n", len(frames), *outDir)
 
 	if *emitQR {
 		if len(*qrEcc) != 1 {
@@ -380,6 +500,9 @@ func runSend(env Env, args []string) error {
 		return failf(ExitInput, "writing %s: %w", recordPath, err)
 	}
 
+	if level == quiet && !*asJSON {
+		return nil
+	}
 	return emit(env.Stdout, *asJSON,
 		sendResult{
 			SessionID:  record.SessionID,
@@ -447,7 +570,12 @@ func runRecv(env Env, args []string) error {
 	stopAfter := fs.Uint("stop-after", 0, "stop after accepting this many frames, or 0 for no limit")
 	keepState := fs.Bool("keep-state", false, "keep the resume state after the transfer completes")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	resolve := verbosityFlags(fs)
 	if err := fs.Parse(args); err != nil {
+		return &exitError{code: ExitUsage, err: err}
+	}
+	level, err := resolve()
+	if err != nil {
 		return &exitError{code: ExitUsage, err: err}
 	}
 	if *saveEvery == 0 {
@@ -464,9 +592,9 @@ func runRecv(env Env, args []string) error {
 		return err
 	}
 
-	key, err := ffi.LoadKey(*keyPath)
+	key, err := loadKey(*keyPath)
 	if err != nil {
-		return failf(ExitInput, "loading %s: %w", *keyPath, err)
+		return err
 	}
 	defer key.Close()
 
@@ -487,7 +615,7 @@ func runRecv(env Env, args []string) error {
 
 	// Restore whatever a previous run got through, if the operator asked for
 	// resumable progress and there is any.
-	store, resumed, err := restoreProgress(env, *stateDir, sessionID, dec)
+	store, resumed, err := restoreProgress(env, level, *stateDir, sessionID, dec)
 	if err != nil {
 		return err
 	}
@@ -500,8 +628,17 @@ func runRecv(env Env, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// How many consecutive rejections with nothing accepted before saying so.
+	// Low enough to be noticed early, high enough not to fire on the ordinary
+	// run of unreadable frames at the start of a capture.
+	const captureNoiseWarning = 50
+
 	accepted, rejected := 0, 0
+	blocksDone := -1
 	stopped := false
+
+	level.say(env.Stderr, loud, "decoding %d blocks from %d captured frames\n",
+		params.BlockCount, len(names))
 
 	for _, name := range names {
 		if ctx.Err() != nil {
@@ -511,6 +648,14 @@ func runRecv(env Env, args []string) error {
 		if *stopAfter > 0 && uint(accepted) >= *stopAfter {
 			stopped = true
 			break
+		}
+		if len(names) > 0 && level >= loud && accepted == 0 && rejected == captureNoiseWarning {
+			// Frames are arriving and none of them authenticate. That is the
+			// wrong key, not a bad camera angle, and an operator who does not
+			// hear it now will wait out the whole stream to learn it.
+			level.say(env.Stderr, loud,
+				"warning: %d frames read and none accepted; this is what a wrong key looks like\n",
+				rejected)
 		}
 
 		frame, err := os.ReadFile(name)
@@ -524,6 +669,22 @@ func runRecv(env Env, args []string) error {
 			continue
 		}
 		accepted++
+
+		// Progress is reported by block rather than by frame. Frames arrive in
+		// their thousands and most of them change nothing an operator can act
+		// on; a block completing is the unit of real progress, and it is what
+		// tells them whether pointing the camera differently is helping.
+		if level >= loud {
+			done, err := dec.BlocksComplete()
+			if err != nil {
+				return failf(ExitInternal, "reading progress: %w", err)
+			}
+			if done != blocksDone {
+				blocksDone = done
+				level.say(env.Stderr, loud, "%d of %d blocks decoded (%d frames accepted, %d rejected)\n",
+					done, params.BlockCount, resumed+accepted, rejected)
+			}
+		}
 
 		// Journal first, then the index. The other order would produce an
 		// index describing a frame the journal does not hold, which is the one
@@ -586,6 +747,10 @@ func runRecv(env Env, args []string) error {
 		}
 	}
 
+	if level == quiet && !*asJSON {
+		return nil
+	}
+
 	human := fmt.Sprintf("session   %s\naccepted  %d frames\nrejected  %d frames\nfiles     %d\nwritten   %s\n",
 		record.SessionID, accepted, rejected, len(entries), *outDir)
 	if resumed > 0 {
@@ -619,7 +784,7 @@ func runRecv(env Env, args []string) error {
 // Every failure here is fail-closed. A state that cannot be trusted is never
 // partially applied, because a decoder holding some of a previous run's frames
 // and no record of which ones is worse than one holding none.
-func restoreProgress(env Env, dir string, sessionID [16]byte, dec *ffi.Decoder) (*resume.Store, int, error) {
+func restoreProgress(env Env, level verbosity, dir string, sessionID [16]byte, dec *ffi.Decoder) (*resume.Store, int, error) {
 	if dir == "" {
 		return nil, 0, nil
 	}
@@ -673,7 +838,9 @@ func restoreProgress(env Env, dir string, sessionID [16]byte, dec *ffi.Decoder) 
 		return nil, 0, failf(ExitInput, "preparing the journal: %w", err)
 	}
 
-	_, _ = fmt.Fprintf(env.Stderr, "resumed %d frames from %s\n", replayed, dir)
+	// Reported at normal level, not verbose: an operator who does not realise
+	// a run resumed will misread every count that follows it.
+	level.say(env.Stderr, normal, "resumed %d frames from %s\n", replayed, dir)
 	return store, replayed, nil
 }
 
@@ -729,7 +896,12 @@ func runVerify(env Env, args []string) error {
 	in := fs.String("in", "frames", "directory holding the transfer record")
 	dir := fs.String("dir", "received", "extracted dataset to check")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	resolve := verbosityFlags(fs)
 	if err := fs.Parse(args); err != nil {
+		return &exitError{code: ExitUsage, err: err}
+	}
+	level, err := resolve()
+	if err != nil {
 		return &exitError{code: ExitUsage, err: err}
 	}
 
@@ -737,6 +909,9 @@ func runVerify(env Env, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	level.say(env.Stderr, loud, "checking %d files in %s against the transfer record\n",
+		len(record.Files), *dir)
 
 	problems, checked, bytes := inspectDataset(*dir, record.Files)
 	ok := len(problems) == 0
@@ -757,6 +932,11 @@ func runVerify(env Env, args []string) error {
 		}
 	}
 
+	// A failure is always reported, at every level. -quiet suppresses the
+	// summary a person reads, never the fact that verification failed.
+	if level == quiet && !*asJSON && ok {
+		return nil
+	}
 	if err := emit(env.Stdout, *asJSON,
 		verifyResult{
 			OK:        ok,
@@ -1081,7 +1261,12 @@ func runDisplay(env Env, args []string) error {
 	qrEcc := fs.String("qr-ecc", "M", "QR error correction: L, M, Q, or H")
 	noClear := fs.Bool("no-clear", false, "do not clear the terminal between frames")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	resolve := verbosityFlags(fs)
 	if err := fs.Parse(args); err != nil {
+		return &exitError{code: ExitUsage, err: err}
+	}
+	level, err := resolve()
+	if err != nil {
 		return &exitError{code: ExitUsage, err: err}
 	}
 	if len(*qrEcc) != 1 {
@@ -1136,6 +1321,9 @@ func runDisplay(env Env, args []string) error {
 		return failf(ExitInput, "displaying frames: %w", err)
 	}
 
+	if level == quiet && !*asJSON {
+		return nil
+	}
 	return emit(env.Stderr, *asJSON,
 		displayResult{
 			SessionID:   record.SessionID,
