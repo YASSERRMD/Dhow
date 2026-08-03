@@ -1,5 +1,24 @@
 # Phase Log
 
+## Phase 28 - Wire the signed manifest through the CLI
+
+**Objective:** `dhow-crypt` has implemented manifest signing, verification,
+`Policy`, and `VerifiedManifest` since Phase 15, and none of it has ever been
+reachable from the command line. `send` writes an unsigned `transfer.json`
+beside the frames and `verify` checks against that, so `dhow verify` answers
+"does this dataset still match the record?" and not "was this produced by
+someone holding the operator's signing key?" - anyone who can edit the dataset
+can edit the record sitting next to it. This phase closes that gap: an FFI
+surface for identity handles and for manifest build and verify, a manifest wire
+format that carries everything the JSON record carried, and `keygen`, `send`,
+`recv`, and `verify` wired through it. The unsigned record is deleted, not
+deprecated.
+
+**Gates:** the manifest round-trips through the ABI with its inventory intact;
+a manifest signed by the wrong identity, or altered in any byte, is rejected by
+both `recv` and `verify`; `transfer.json` no longer exists anywhere in the
+tree; `scripts/gate.sh` stays green.
+
 ## Phase 27 - Chaos and soak
 
 **Objective:** Every test so far picks the fault it injects. A harness that
