@@ -120,7 +120,12 @@ done
 if [ "$FAILED" -gt 0 ]; then
     echo "=== FUZZ FAILED: ${FAILED} target(s) ===" >&2
     echo "Reproduce with:" >&2
-    echo "  cargo +${TOOLCHAIN} fuzz run --fuzz-dir $ROOT/fuzz <target> <artifact>" >&2
+    # The sanitizer flag is part of the command, not decoration. Omitting it
+    # would hand a macOS reader a line that hangs in ASan startup rather than
+    # reproducing their crash, which is the exact trap docs/FUZZING.md exists
+    # to warn about.
+    echo "  cargo +${TOOLCHAIN} fuzz run --fuzz-dir $ROOT/fuzz -s ${SANITIZER} <target> <artifact>" >&2
+    echo "Then copy the artifact into fuzz/regressions/<target>/ and fix it there." >&2
     exit 1
 fi
 

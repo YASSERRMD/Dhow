@@ -125,8 +125,12 @@ not crash:
 `cargo-fuzz` writes the input to `fuzz/artifacts/<target>/`. Reproduce it with:
 
 ```bash
-cd fuzz && cargo +nightly-2025-12-14 fuzz run <target> artifacts/<target>/<file>
+cargo +nightly-2025-12-14 fuzz run --fuzz-dir fuzz -s none <target> \
+    fuzz/artifacts/<target>/<file>
 ```
+
+`-s none` on macOS, `-s address` elsewhere — the same choice `scripts/fuzz.sh`
+makes, and it prints the whole line for you when a target fails.
 
 Then: copy the input to `fuzz/regressions/<target>/`, fix the parser, and commit
 both in the same change. A crash found by fuzzing and fixed without a regression
