@@ -24,7 +24,10 @@ use dhow_codec::resume::ResumeFile;
 use dhow_codec::session::{RaptorQParams, SessionParams};
 use dhow_crypt::aead::{TransferKeys, decrypt_payload, encrypt_payload};
 use dhow_crypt::kdf::Salt;
-use dhow_crypt::key::{OperatorKey, load_operator, save_operator};
+use dhow_crypt::key::{
+    IdentityKey, OperatorKey, PublicIdentity, load_identity, load_operator, load_public,
+    save_identity, save_operator, save_public,
+};
 use std::os::raw::{c_char, c_int};
 use std::path::PathBuf;
 
@@ -1027,4 +1030,266 @@ pub unsafe extern "C" fn dhow_qr_encode_frame(
         // SAFETY: forwarded from this function's own contract.
         unsafe { write_out(&modules, buf, len, written) }
     })
+}
+
+// --- Identities ---
+//
+// The operator key encrypts; the identity signs. They are separate handles
+// because they are separate secrets with opposite distribution rules: both
+// operators hold the same operator key, and only the sender holds the identity
+// secret. A signature made with a key the receiver also holds would prove
+// nothing the receiver could not have produced itself.
+
+/// An opaque Ed25519 identity keypair.
+pub struct DhowIdentity {
+    inner: IdentityKey,
+}
+
+/// An opaque Ed25519 public identity.
+pub struct DhowPublicIdentity {
+    inner: PublicIdentity,
+}
+
+/// Generates a new identity keypair.
+///
+/// Returns null on failure; the secret half never crosses the boundary.
+#[unsafe(no_mangle)]
+pub extern "C" fn dhow_identity_generate() -> *mut DhowIdentity {
+    guard_ptr(|| {
+        clear_last_error();
+        match IdentityKey::generate() {
+            Ok(inner) => Box::into_raw(Box::new(DhowIdentity { inner })),
+            Err(e) => {
+                crate::error::set_last_error(e.to_string());
+                std::ptr::null_mut()
+            }
+        }
+    })
+}
+
+/// Loads an identity keypair from a key file.
+///
+/// Fails if the file is missing, malformed, holds an operator key rather than
+/// an identity, or is readable by anyone but its owner.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_identity_load(path: *const c_char) -> *mut DhowIdentity {
+    guard_ptr(|| {
+        clear_last_error();
+        // SAFETY: forwarded from this function's own contract.
+        let Some(path) = (unsafe { path_from(path) }) else {
+            crate::error::set_last_error("identity path was null or not valid UTF-8");
+            return std::ptr::null_mut();
+        };
+        match load_identity(&path) {
+            Ok(inner) => Box::into_raw(Box::new(DhowIdentity { inner })),
+            Err(e) => {
+                crate::error::set_last_error(e.to_string());
+                std::ptr::null_mut()
+            }
+        }
+    })
+}
+
+/// Writes an identity keypair to a key file with owner-only permissions.
+///
+/// # Safety
+///
+/// `identity` must be a live handle and `path` a NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_identity_save(
+    identity: *const DhowIdentity,
+    path: *const c_char,
+) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        if identity.is_null() {
+            return fail(DhowStatus::NullArgument, "identity handle was null");
+        }
+        // SAFETY: forwarded from this function's own contract.
+        let Some(path) = (unsafe { path_from(path) }) else {
+            return fail(
+                DhowStatus::NullArgument,
+                "identity path was null or not UTF-8",
+            );
+        };
+        // SAFETY: `identity` is non-null and the caller guarantees it is live.
+        let identity = unsafe { &*identity };
+        match save_identity(&path, &identity.inner) {
+            Ok(()) => DhowStatus::Ok,
+            Err(e) => fail(DhowStatus::KeyFailed, e.to_string()),
+        }
+    })
+}
+
+/// Returns the public half of an identity as a new handle.
+///
+/// Returns null on failure.
+///
+/// # Safety
+///
+/// `identity` must be a live handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_identity_public(
+    identity: *const DhowIdentity,
+) -> *mut DhowPublicIdentity {
+    guard_ptr(|| {
+        clear_last_error();
+        if identity.is_null() {
+            crate::error::set_last_error("identity handle was null");
+            return std::ptr::null_mut();
+        }
+        // SAFETY: `identity` is non-null and the caller guarantees it is live.
+        let identity = unsafe { &*identity };
+        Box::into_raw(Box::new(DhowPublicIdentity {
+            inner: identity.inner.public(),
+        }))
+    })
+}
+
+/// Releases an identity handle. Passing null is a no-op.
+///
+/// # Safety
+///
+/// `identity` must be null or a handle from this library that has not been
+/// freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_identity_free(identity: *mut DhowIdentity) {
+    if identity.is_null() {
+        return;
+    }
+    // SAFETY: the caller guarantees `identity` came from `Box::into_raw` here
+    // and has not already been freed. Dropping zeroizes the secret half.
+    drop(unsafe { Box::from_raw(identity) });
+}
+
+/// Loads a public identity from a 32-byte public key file.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_public_load(path: *const c_char) -> *mut DhowPublicIdentity {
+    guard_ptr(|| {
+        clear_last_error();
+        // SAFETY: forwarded from this function's own contract.
+        let Some(path) = (unsafe { path_from(path) }) else {
+            crate::error::set_last_error("public identity path was null or not valid UTF-8");
+            return std::ptr::null_mut();
+        };
+        match load_public(&path) {
+            Ok(inner) => Box::into_raw(Box::new(DhowPublicIdentity { inner })),
+            Err(e) => {
+                crate::error::set_last_error(e.to_string());
+                std::ptr::null_mut()
+            }
+        }
+    })
+}
+
+/// Writes a public identity to a file.
+///
+/// # Safety
+///
+/// `public` must be a live handle and `path` a NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_public_save(
+    public: *const DhowPublicIdentity,
+    path: *const c_char,
+) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        if public.is_null() {
+            return fail(DhowStatus::NullArgument, "public identity handle was null");
+        }
+        // SAFETY: forwarded from this function's own contract.
+        let Some(path) = (unsafe { path_from(path) }) else {
+            return fail(
+                DhowStatus::NullArgument,
+                "public identity path was null or not UTF-8",
+            );
+        };
+        // SAFETY: `public` is non-null and the caller guarantees it is live.
+        let public = unsafe { &*public };
+        match save_public(&path, &public.inner) {
+            Ok(()) => DhowStatus::Ok,
+            Err(e) => fail(DhowStatus::KeyFailed, e.to_string()),
+        }
+    })
+}
+
+/// Writes the 32-byte encoding of a public identity.
+///
+/// # Safety
+///
+/// `public` must be a live handle and `out` must point to 32 writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_public_bytes(
+    public: *const DhowPublicIdentity,
+    out: *mut u8,
+) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        if public.is_null() {
+            return fail(DhowStatus::NullArgument, "public identity handle was null");
+        }
+        if out.is_null() {
+            return fail(DhowStatus::NullArgument, "output pointer was null");
+        }
+        // SAFETY: `public` is non-null and the caller guarantees it is live.
+        let public = unsafe { &*public };
+        let bytes = public.inner.to_bytes();
+        // SAFETY: the caller guarantees 32 writable bytes at `out`, and the
+        // source is a local array that cannot overlap it.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, 32) };
+        DhowStatus::Ok
+    })
+}
+
+/// Writes the short fingerprint of a public identity, without its NUL.
+///
+/// Follows the two-call convention: pass a null buffer to learn the length.
+/// The fingerprint is for an operator comparing two machines by eye and must
+/// not be used as an identifier in any security check.
+///
+/// # Safety
+///
+/// `public` must be a live handle; `buf` must be null or point to `len`
+/// writable bytes; `written` must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_public_fingerprint(
+    public: *const DhowPublicIdentity,
+    buf: *mut u8,
+    len: usize,
+    written: *mut usize,
+) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        if public.is_null() {
+            return fail(DhowStatus::NullArgument, "public identity handle was null");
+        }
+        // SAFETY: `public` is non-null and the caller guarantees it is live.
+        let public = unsafe { &*public };
+        let text = public.inner.fingerprint();
+        // SAFETY: forwarded from this function's own contract.
+        unsafe { write_out(text.as_bytes(), buf, len, written) }
+    })
+}
+
+/// Releases a public identity handle. Passing null is a no-op.
+///
+/// # Safety
+///
+/// `public` must be null or a handle from this library that has not been freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_public_free(public: *mut DhowPublicIdentity) {
+    if public.is_null() {
+        return;
+    }
+    // SAFETY: the caller guarantees `public` came from `Box::into_raw` here and
+    // has not already been freed.
+    drop(unsafe { Box::from_raw(public) });
 }
