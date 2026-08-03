@@ -1,5 +1,7 @@
 # Verifying a Received Dataset
 
+> Part of the [Operations Guide](OPERATIONS.md).
+
 `dhow recv` will not write a dataset it could not verify: the payload digest
 and the AEAD tag are both checked before a single byte is extracted. So a
 dataset that exists on disk was correct when it was written.
