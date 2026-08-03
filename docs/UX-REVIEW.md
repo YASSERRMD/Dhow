@@ -42,6 +42,8 @@ Reviewed at Phase 26.
 | Does a failure name a next step where one exists? | For the cases that have one: missing key, permissive key, and every resume-state rejection. Others state the cause only. |
 | Are error messages free of key material and payload bytes? | Yes, enforced in the Rust core and tested there. |
 | Does a rejected resume state say the state is disposable? | Yes. Every message on that path says deleting the directory is safe and what it costs. |
+| Does a failed transfer leave partial output? | No. Extraction stages into a sibling directory and renames, so the output directory either holds the whole dataset or does not exist. |
+| Does `recv` overwrite an existing output directory? | No. It refuses, because merging two datasets leaves every file that happened to match still verifying. |
 
 ## Exit codes
 
