@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1049,5 +1050,192 @@ func TestVerifyRejectsAnOlderTransferRecord(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "version 2") {
 		t.Errorf("the error does not say which version this build reads: %s", errOut)
+	}
+}
+
+// --- Exit-code contract ---
+
+func TestEveryDocumentedExitCodeIsProducedBySomething(t *testing.T) {
+	// The help text promises these codes. A promise nothing provokes is a
+	// promise nobody has checked.
+	key, frameDir, _ := sendFixture(t, "2")
+	work := t.TempDir()
+	outDir := filepath.Join(work, "received")
+	missing := filepath.Join(work, "nowhere")
+
+	// Set up a good receive, so the verify cases have something to damage.
+	if code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir); code != ExitOK {
+		t.Fatalf("recv exited %d: %s", code, errOut)
+	}
+
+	cases := []struct {
+		name string
+		want int
+		args []string
+	}{
+		{"success", ExitOK, []string{"verify", "-in", frameDir, "-dir", outDir}},
+		{"no command", ExitUsage, nil},
+		{"unknown command", ExitUsage, []string{"transmogrify"}},
+		{"unknown flag", ExitUsage, []string{"send", "-nonsense"}},
+		{"missing required flag", ExitUsage, []string{"send", "-key", key}},
+		{"contradictory verbosity", ExitUsage, []string{"verify", "-in", frameDir, "-dir", outDir, "-quiet", "-verbose"}},
+		{"missing key file", ExitInput, []string{"recv", "-key", filepath.Join(missing, "k"), "-in", frameDir, "-out", filepath.Join(work, "a")}},
+		{"missing frame directory", ExitInput, []string{"recv", "-key", key, "-in", missing, "-out", filepath.Join(work, "b")}},
+		{"missing dataset", ExitVerifyFailed, []string{"verify", "-in", frameDir, "-dir", missing}},
+	}
+
+	for _, tc := range cases {
+		if code, _, errOut := run(tc.args...); code != tc.want {
+			t.Errorf("%s: exited %d, want %d (%s)", tc.name, code, tc.want, strings.TrimSpace(errOut))
+		}
+	}
+}
+
+func TestIncompleteTransferExitsFour(t *testing.T) {
+	// Four is the one code worth retrying, so it must be reachable and must
+	// not be confused with a verification failure.
+	key, frameDir, _ := sendFixture(t, "2")
+	work := t.TempDir()
+
+	code, _, errOut := run("recv", "-key", key, "-in", frameDir,
+		"-out", filepath.Join(work, "received"),
+		"-state", filepath.Join(work, "state"), "-stop-after", "5")
+	if code != ExitIncomplete {
+		t.Fatalf("an interrupted receive exited %d, want %d: %s", code, ExitIncomplete, errOut)
+	}
+}
+
+func TestFailureAlwaysReachesStderrEvenWhenQuiet(t *testing.T) {
+	// -quiet is a display preference. Silencing a failure would turn it into a
+	// correctness hazard.
+	key, frameDir, _ := sendFixture(t, "2")
+	work := t.TempDir()
+	outDir := filepath.Join(work, "received")
+	if code, _, errOut := run("recv", "-key", key, "-in", frameDir, "-out", outDir); code != ExitOK {
+		t.Fatalf("recv exited %d: %s", code, errOut)
+	}
+	if err := os.Remove(filepath.Join(outDir, "readme.md")); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	code, out, errOut := run("verify", "-in", frameDir, "-dir", outDir, "-quiet")
+	if code != ExitVerifyFailed {
+		t.Fatalf("verify exited %d, want %d", code, ExitVerifyFailed)
+	}
+	if errOut == "" {
+		t.Error("-quiet silenced a verification failure entirely")
+	}
+	if !strings.Contains(out, "readme.md") && !strings.Contains(errOut, "verification failed") {
+		t.Errorf("a quiet failure said nothing useful:\nstdout %q\nstderr %q", out, errOut)
+	}
+}
+
+// --- Verbosity ---
+
+func TestQuietSuppressesTheSummaryButNotTheResult(t *testing.T) {
+	key, frameDir, _ := sendFixture(t, "2")
+	work := t.TempDir()
+
+	code, out, _ := run("recv", "-key", key, "-in", frameDir,
+		"-out", filepath.Join(work, "received"), "-quiet")
+	if code != ExitOK {
+		t.Fatalf("recv -quiet exited %d", code)
+	}
+	if out != "" {
+		t.Errorf("-quiet printed to stdout: %q", out)
+	}
+
+	// The dataset must still be there: -quiet changes what is said, not what
+	// is done.
+	if names := listFiles(t, filepath.Join(work, "received")); len(names) == 0 {
+		t.Error("-quiet suppressed the extraction as well as the summary")
+	}
+}
+
+func TestQuietDoesNotSuppressJSON(t *testing.T) {
+	// A caller asking for machine output and silence at once wants the JSON.
+	// Dropping it would be data loss dressed up as a preference.
+	key, frameDir, _ := sendFixture(t, "2")
+	work := t.TempDir()
+
+	code, out, errOut := run("recv", "-key", key, "-in", frameDir,
+		"-out", filepath.Join(work, "received"), "-quiet", "-json")
+	if code != ExitOK {
+		t.Fatalf("recv exited %d: %s", code, errOut)
+	}
+	var result recvResult
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("-quiet -json produced no parseable JSON: %v\n%q", err, out)
+	}
+	if result.Files == 0 {
+		t.Error("the JSON reported no files")
+	}
+}
+
+func TestVerboseAddsCommentaryWithoutChangingTheResult(t *testing.T) {
+	key, frameDir, _ := sendFixture(t, "2")
+	work := t.TempDir()
+
+	plainCode, plainOut, plainErr := run("recv", "-key", key, "-in", frameDir,
+		"-out", filepath.Join(work, "a"), "-json")
+	loudCode, loudOut, loudErr := run("recv", "-key", key, "-in", frameDir,
+		"-out", filepath.Join(work, "b"), "-json", "-verbose")
+
+	if plainCode != ExitOK || loudCode != ExitOK {
+		t.Fatalf("exit codes %d and %d", plainCode, loudCode)
+	}
+
+	// Commentary belongs on stderr so a pipe on stdout is unaffected by it.
+	var a, b recvResult
+	if err := json.Unmarshal([]byte(plainOut), &a); err != nil {
+		t.Fatalf("plain JSON: %v", err)
+	}
+	if err := json.Unmarshal([]byte(loudOut), &b); err != nil {
+		t.Fatalf("verbose JSON: %v", err)
+	}
+	if a.Frames != b.Frames || a.Files != b.Files {
+		t.Errorf("-verbose changed the result: %+v vs %+v", a, b)
+	}
+
+	if len(loudErr) <= len(plainErr) {
+		t.Errorf("-verbose added no commentary (plain %q, verbose %q)", plainErr, loudErr)
+	}
+	if !strings.Contains(loudErr, "blocks decoded") {
+		t.Errorf("-verbose did not report block progress: %q", loudErr)
+	}
+}
+
+func TestContradictoryVerbosityIsRefusedNotGuessed(t *testing.T) {
+	key, frameDir, _ := sendFixture(t, "2")
+
+	for _, cmd := range [][]string{
+		{"keygen", "-out", filepath.Join(t.TempDir(), "k"), "-quiet", "-verbose"},
+		{"send", "-key", key, "-in", frameDir, "-out", filepath.Join(t.TempDir(), "f"), "-quiet", "-verbose"},
+		{"recv", "-key", key, "-in", frameDir, "-out", filepath.Join(t.TempDir(), "r"), "-quiet", "-verbose"},
+		{"verify", "-in", frameDir, "-dir", frameDir, "-quiet", "-verbose"},
+	} {
+		code, _, errOut := run(cmd...)
+		if code != ExitUsage {
+			t.Errorf("%s: exited %d, want %d", cmd[0], code, ExitUsage)
+		}
+		if !strings.Contains(errOut, "contradict") {
+			t.Errorf("%s: the error does not explain the conflict: %s", cmd[0], errOut)
+		}
+	}
+}
+
+func TestHelpDocumentsEveryExitCodeTheCodeDefines(t *testing.T) {
+	// Help text drifts from the code silently. This fails when a code is added
+	// without being explained.
+	_, out, _ := run("help")
+	for _, code := range []int{ExitOK, ExitUsage, ExitInput, ExitVerifyFailed, ExitIncomplete, ExitInternal} {
+		if !strings.Contains(out, fmt.Sprintf("%d", code)) {
+			t.Errorf("the help text does not mention exit code %d", code)
+		}
+	}
+	for _, flag := range []string{"-json", "-quiet", "-verbose"} {
+		if !strings.Contains(out, flag) {
+			t.Errorf("the help text does not mention %s", flag)
+		}
 	}
 }
