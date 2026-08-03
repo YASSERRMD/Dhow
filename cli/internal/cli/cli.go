@@ -335,7 +335,12 @@ func runSend(env Env, args []string) error {
 	qrScale := fs.Uint("qr-scale", 8, "PNG pixels per QR module")
 	emitQR := fs.Bool("qr", false, "also render each frame as a QR code PNG")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	resolve := verbosityFlags(fs)
 	if err := fs.Parse(args); err != nil {
+		return &exitError{code: ExitUsage, err: err}
+	}
+	level, err := resolve()
+	if err != nil {
 		return &exitError{code: ExitUsage, err: err}
 	}
 	if *in == "" {
@@ -349,6 +354,8 @@ func runSend(env Env, args []string) error {
 	if !info.IsDir() {
 		return failf(ExitUsage, "%s is not a directory", *in)
 	}
+
+	level.say(env.Stderr, loud, "packing %s\n", *in)
 
 	var archive strings.Builder
 	entries, err := pack.Create(&archive, *in)
@@ -383,6 +390,9 @@ func runSend(env Env, args []string) error {
 	}
 	defer enc.Close()
 
+	level.say(env.Stderr, loud, "packed %d files into %d bytes; encoding\n",
+		len(entries), archive.Len())
+
 	frames, err := enc.Frames()
 	if err != nil {
 		return failf(ExitInternal, "reading frames: %w", err)
@@ -401,6 +411,8 @@ func runSend(env Env, args []string) error {
 			return failf(ExitInput, "writing %s: %w", name, err)
 		}
 	}
+
+	level.say(env.Stderr, loud, "wrote %d frames to %s\n", len(frames), *outDir)
 
 	if *emitQR {
 		if len(*qrEcc) != 1 {
@@ -443,6 +455,9 @@ func runSend(env Env, args []string) error {
 		return failf(ExitInput, "writing %s: %w", recordPath, err)
 	}
 
+	if level == quiet && !*asJSON {
+		return nil
+	}
 	return emit(env.Stdout, *asJSON,
 		sendResult{
 			SessionID:  record.SessionID,
