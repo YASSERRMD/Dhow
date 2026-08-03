@@ -733,9 +733,9 @@ func runRecv(env Env, args []string) error {
 		return failf(ExitVerifyFailed, "verifying transfer: %w", err)
 	}
 
-	entries, err := pack.Extract(payload, *outDir)
+	entries, err := extractAtomically(payload, *outDir)
 	if err != nil {
-		return failf(ExitVerifyFailed, "extracting into %s: %w", *outDir, err)
+		return err
 	}
 
 	// The state has done its job. Leaving it behind would be picked up by the
@@ -773,6 +773,55 @@ func runRecv(env Env, args []string) error {
 			StateDir:  stateShown,
 		},
 		human)
+}
+
+// extractAtomically unpacks a payload so the output directory either holds the
+// whole dataset or does not exist.
+//
+// Extraction can fail partway - a name the archive should not have contained,
+// a disk filling, a permission the destination does not grant - and writing
+// directly into the destination would leave a partial dataset behind. The
+// transfer reports failure either way, but an operator who reruns a script and
+// sees a populated directory has been handed something that looks like output
+// and is not.
+//
+// So it unpacks into a sibling and renames. A sibling rather than the system
+// temporary directory because a rename across filesystems is a copy, and the
+// point is that the last step is atomic.
+func extractAtomically(payload []byte, outDir string) ([]pack.Entry, error) {
+	if _, err := os.Stat(outDir); err == nil {
+		return nil, failf(ExitInput,
+			"%s already exists; extract into a directory that does not, "+
+				"so a partial or stale dataset cannot be mistaken for this one", outDir)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, failf(ExitInput, "checking %s: %w", outDir, err)
+	}
+
+	parent := filepath.Dir(outDir)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return nil, failf(ExitInput, "creating %s: %w", parent, err)
+	}
+
+	staging, err := os.MkdirTemp(parent, "."+filepath.Base(outDir)+".partial-")
+	if err != nil {
+		return nil, failf(ExitInput, "creating a staging directory in %s: %w", parent, err)
+	}
+
+	entries, err := pack.Extract(payload, staging)
+	if err != nil {
+		// The staging directory holds whatever was written before the failure,
+		// and none of it is wanted. Its removal is best effort: reporting a
+		// cleanup error would replace the diagnosis that matters.
+		_ = os.RemoveAll(staging)
+		return nil, failf(ExitVerifyFailed, "extracting into %s: %w", outDir, err)
+	}
+
+	if err := os.Rename(staging, outDir); err != nil {
+		_ = os.RemoveAll(staging)
+		return nil, failf(ExitInput, "moving the extracted dataset into %s: %w", outDir, err)
+	}
+
+	return entries, nil
 }
 
 // restoreProgress opens the state directory and replays whatever it holds.

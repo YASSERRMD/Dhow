@@ -234,7 +234,8 @@ Always run `verify` afterwards, and again later if the dataset matters. See
 | `recv` exits 4, all blocks climbing slowly | Ordinary loss; the transfer is just slow. | Let it run. The stream loops. Consider a lower QR version or better lighting. |
 | Many rejected frames, blocks still completing | Partial captures and blur. Normal. | Ignore unless the accept rate is unusably low. |
 | `recv` exits 2 naming the state directory | Saved progress is unusable or from another session. | Follow the message. Deleting the state directory is always safe; it costs the frames captured so far. |
-| `recv` exits 3 | The payload digest or AEAD tag failed. | This should not happen after a successful decode. Re-run the transfer; if it recurs, file it as a bug with the session id. |
+| `recv` exits 3 | The payload digest or AEAD tag failed, or the dataset could not be unpacked. | This should not happen after a successful decode. Nothing was written — extraction is all or nothing. Re-run the transfer; if it recurs, file it as a bug with the session id. |
+| `recv` exits 2 saying the output directory already exists | A previous run left one, or the path is wrong. | Extract into a directory that does not exist. Merging two datasets would leave every file that happened to match still verifying. |
 | `verify` exits 3 with `content` problems | The dataset changed after extraction. | The transfer was fine; the storage was not. Re-extract from a fresh receive. |
 | `verify` exits 3 with `unexpected` problems | Something added files to the output directory. | Extract into an empty directory. |
 | `send` refuses a QR version | The symbol size does not fit. | Consult the capacity table above, or drop `-symbol-size`. |

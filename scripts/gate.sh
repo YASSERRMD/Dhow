@@ -93,6 +93,16 @@ run_gate "loopback end-to-end" \
 run_gate "operations guide drill" \
     bash -c "'$ROOT/scripts/drill.sh' >/dev/null"
 
+# --- Chaos ---
+#
+# A fixed seed so the gate is reproducible; the point of the gate run is that
+# the harness itself still works and the invariants still hold, not to search.
+# Searching is `scripts/chaos.sh 500` with a fresh seed, which is where a new
+# failure is actually found.
+
+run_gate "chaos soak (12 rounds)" \
+    bash -c "'$ROOT/scripts/chaos.sh' 12 20260803 >/dev/null"
+
 # --- Summary ---
 
 echo ""

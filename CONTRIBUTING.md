@@ -26,3 +26,30 @@ process for contributing.
 - Report security vulnerabilities to the maintainers privately.
 - Do not commit secrets, keys, or credentials.
 - All cryptographic code must use audited primitives.
+
+## Soaking
+
+`scripts/chaos.sh` runs randomised fault-injection rounds against the shipped
+binary. The gate runs twelve on a fixed seed and CI runs forty; neither is a
+search.
+
+Search like this:
+
+```bash
+scripts/chaos.sh 500
+```
+
+It prints its seed. A failing round prints the seed and the exact parameters,
+and re-running with that seed reproduces it:
+
+```bash
+scripts/chaos.sh 500 1754210000
+```
+
+Set `CHAOS_VERBOSE=1` to see the parameters of every round rather than only of
+a failure.
+
+Run a soak before a release, and after any change to the codec, the framing, or
+the resume path. A round has exactly two acceptable outcomes — completed and
+verified, or failed closed having written nothing. Anything else is a defect,
+including a round that exits with a code the harness does not expect.

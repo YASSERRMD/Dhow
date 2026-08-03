@@ -146,6 +146,20 @@ jobs:
           go-version: '1.25.5'
       - run: scripts/drill.sh
 
+  chaos:
+    name: Chaos Soak
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.5'
+      # A larger round count than the local gate runs, with a seed that varies
+      # by run number, so CI searches a little rather than re-checking one
+      # fixed sequence forever. The seed is printed on failure.
+      - run: scripts/chaos.sh 40 "${{ github.run_number }}"
+
   spec-check:
     name: Wire-Format Spec Check
     runs-on: ubuntu-latest
