@@ -9,6 +9,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# The Rust workspace lives in core/, not at the repository root, so every cargo
+# step carries `working-directory: core`. Without it cargo exits with "could not
+# find Cargo.toml" and the gate never runs at all.
 jobs:
   rustfmt:
     name: Rust Format
@@ -19,6 +22,7 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --all --check
+        working-directory: core
 
   clippy:
     name: Rust Clippy
@@ -29,6 +33,7 @@ jobs:
         with:
           components: clippy
       - run: cargo clippy --all-targets -- -D warnings
+        working-directory: core
 
   rust-test:
     name: Rust Test
@@ -37,6 +42,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --all-targets
+        working-directory: core
 
   cargo-audit:
     name: Cargo Audit
