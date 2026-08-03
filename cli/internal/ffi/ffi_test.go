@@ -2,6 +2,7 @@ package ffi
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -88,8 +89,8 @@ func transfer(t *testing.T, plaintext []byte, keep func(i int) bool) ([]byte, er
 func TestABIVersionMatches(t *testing.T) {
 	// A mismatch means Go and Rust disagree about handle layout, which must be
 	// caught at startup rather than surfacing as memory corruption.
-	if got := ABIVersion(); got != 2 {
-		t.Errorf("ABIVersion() = %d, want 2", got)
+	if got := ABIVersion(); got != 3 {
+		t.Errorf("ABIVersion() = %d, want 3", got)
 	}
 }
 
@@ -723,5 +724,57 @@ func TestResumeCallsOnClosedHandlesAreRefused(t *testing.T) {
 	var nilDec *Decoder
 	if _, err := nilDec.ResumeState(0); err == nil {
 		t.Error("ResumeState on a nil decoder returned no error")
+	}
+}
+
+func TestBlake3MatchesPublishedVectors(t *testing.T) {
+	// Checked against the published answers rather than against a second call,
+	// so a wrong algorithm behind the binding fails here.
+	for _, tc := range []struct {
+		in   []byte
+		want string
+	}{
+		{nil, "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"},
+		{[]byte{}, "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"},
+		{[]byte{0x00}, "2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213"},
+		{[]byte{0x00, 0x01}, "7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"},
+	} {
+		got, err := Blake3(tc.in)
+		if err != nil {
+			t.Fatalf("Blake3(%x): %v", tc.in, err)
+		}
+		if hex.EncodeToString(got[:]) != tc.want {
+			t.Errorf("Blake3(%x) = %s, want %s", tc.in, hex.EncodeToString(got[:]), tc.want)
+		}
+	}
+}
+
+func TestBlake3SpansAChunkBoundary(t *testing.T) {
+	// BLAKE3 switches from a single chunk to a tree at 1024 bytes, which is
+	// where a hasty implementation goes wrong. The published answers for the
+	// standard 0,1,..,250 repeating pattern pin both sides of the boundary.
+	pattern := func(n int) []byte {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = byte(i % 251)
+		}
+		return b
+	}
+	for _, tc := range []struct {
+		n    int
+		want string
+	}{
+		{1023, "10108970eeda3eb932baac1428c7a2163b0e924c9a9e25b35bba72b28f70bd11"},
+		{1024, "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7"},
+		{1025, "d00278ae47eb27b34faecf67b4fe263f82d5412916c1ffd97c8cb7fb814b8444"},
+		{2048, "e776b6028c7cd22a4d0ba182a8bf62205d2ef576467e838ed6f2529b85fba24a"},
+	} {
+		got, err := Blake3(pattern(tc.n))
+		if err != nil {
+			t.Fatalf("Blake3(%d bytes): %v", tc.n, err)
+		}
+		if hex.EncodeToString(got[:]) != tc.want {
+			t.Errorf("Blake3(%d bytes) = %s, want %s", tc.n, hex.EncodeToString(got[:]), tc.want)
+		}
 	}
 }
