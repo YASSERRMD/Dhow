@@ -612,7 +612,7 @@ func TestVerifyResumeRejectsADivergentReplay(t *testing.T) {
 	}
 
 	for name, stream := range map[string][][]byte{
-		"one frame short": taken[:len(taken)-1],
+		"one frame short":  taken[:len(taken)-1],
 		"nothing replayed": {},
 		"one frame extra":  frames[:11],
 	} {
