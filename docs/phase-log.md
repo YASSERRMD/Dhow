@@ -19,6 +19,250 @@ a manifest signed by the wrong identity, or altered in any byte, is rejected by
 both `recv` and `verify`; `transfer.json` no longer exists anywhere in the
 tree; `scripts/gate.sh` stays green.
 
+### B-1 first: 2,000 more rounds and one hypothesis eliminated
+
+The phase opened with the B-1 hunt rather than with feature work. Four fresh
+seeds, 500 rounds each:
+
+```
+$ scripts/chaos.sh 500 1000003        $ scripts/chaos.sh 500 2718281
+  rounds     500                        rounds     500
+  completed  338                        completed  326
+  closed     162                        closed     174
+  corrupted  0                          corrupted  0
+=== CHAOS PASSED (seed 1000003) ===   === CHAOS PASSED (seed 2718281) ===
+
+$ scripts/chaos.sh 500 31415926       $ scripts/chaos.sh 500 57721566
+  rounds     500                        rounds     500
+  completed  325                        completed  332
+  closed     175                        closed     168
+  corrupted  0                          corrupted  0
+=== CHAOS PASSED (seed 31415926) === === CHAOS PASSED (seed 57721566) ===
+```
+
+Not reproduced. That brings the seeded-data total to 2,960 rounds. B-1 stays
+open: the original failure was seen once in 120 rounds against data the harness
+could not replay, so absence here bounds how common it is and not whether it
+exists.
+
+One mechanism was eliminated rather than merely not observed. `pack.writeFile`
+passes the extraction mode to `os.OpenFile`, where the process umask applies, so
+a umask containing `0100` would strip the executable bit and produce exactly the
+observed signature - `diff -r` passes, `verify` reports `mode`. A transfer of an
+executable file was run under 0022, 0002, 0077, and 0027 and the bit survived
+every one:
+
+```
+umask 0022: extracted run.sh mode=755 verify=OK
+umask 0002: extracted run.sh mode=755 verify=OK
+umask 0077: extracted run.sh mode=700 verify=OK
+umask 0027: extracted run.sh mode=750 verify=OK
+```
+
+0111 and 0177 could not be tested, because under them the harness cannot create
+its own fixture - which is also why no shell runs with them. So this rules out
+umask as the mechanism, not `mode` as the cause.
+
+This phase moved the inventory from `transfer.json` into the signed manifest.
+That changes nothing about B-1: the digests still come from `pack.writeEntry`
+reading the same stream, and the executable bit still comes from the same
+`d.Info()` call. If the cause is in either, it survived the change.
+
+### What the phase actually changed
+
+**Manifest wire format v2.** The v1 manifest authenticated the file inventory
+while the salt, nonce, and coding parameters that produce those files travelled
+beside it unsigned. A manifest that signs the output and not the inputs protects
+less than it appears to, so v2 folds them in: the fixed header grows from 168 to
+228 bytes, and file entries from 42+name to 43+name with a trailing flag byte
+carrying the executable bit.
+
+Undefined flag bits are rejected rather than masked. Masking would let an old
+receiver discard a bit a future version gives meaning to while reporting that it
+had verified the whole manifest.
+
+**The payload digest was wrong, and had been since Phase 15.** The spec says
+"BLAKE3 of the encrypted payload" and `ManifestHeader::new` computed a digest of
+the concatenated per-file digests - a different quantity over different bytes,
+which no receiver could have checked against anything it held. Nothing depended
+on it, because nothing read the manifest. v2 takes it from `SessionParams`, so
+the manifest and the session header cannot disagree.
+
+**The FFI surface.** Sixteen new functions and two handle types, ABI 4. The
+awkward part was the inventory, which is variable-length in two dimensions: a
+variable number of entries, each with a variable-length name. Going in, the
+caller composes a `#[repr(C)] DhowFileEntry` array and passes a pointer and a
+count. Coming out there is no array at all - a verified manifest is a handle and
+its entries are read through indexed accessors, because handing back an array
+would mean handing back allocations the caller must free with an allocator it
+does not own, which this ABI has never done.
+
+`DhowManifest` can only be produced by building one from an identity or
+verifying one against a public identity. There is no way to obtain one by
+parsing, so holding the handle means the signature was checked.
+
+`dhow_manifest_build` parses the signed bytes back before returning, so the
+handle describes what was serialized rather than what the builder intended. That
+is also what makes a traversal name impossible to sign even if the entry
+validation ahead of it were removed.
+
+**Two keys, and the CLI now knows the difference.** `keygen -kind identity`
+writes an Ed25519 keypair and its public half and prints a fingerprint. `send`
+takes `-identity` and signs. `recv`, `verify`, and `display` take `-signer` and
+read *nothing* out of a transfer before the signature checks - which matters
+more than it sounds, because the session id, salt, nonce, and every coding
+parameter now come from the manifest.
+
+`recv` additionally reconciles the extracted archive against the signed
+inventory. The payload digest already proves the archive is the one that was
+signed for, but not that the archive agrees with the inventory in the same
+manifest; a sender whose packing and manifest-building disagreed would produce
+exactly that, and the receiver is the last place to notice before a dataset is
+handed to someone.
+
+### Defects fixed from earlier phases
+
+Four, none of them in this phase's own work.
+
+**`ManifestError::InvalidKey` reported the wrong thing** (Phase 15). It formats
+as "invalid manifest signature: {details}" and all three of its uses reported
+something else - a non-zero reserved field, or a name that is not UTF-8. An
+operator handed "invalid manifest signature: reserved1 must be zero" has been
+told the wrong thing about a rejected transfer. Renamed to `Malformed`, which is
+what `dhow-crypt` had always called it on its side of the conversion.
+
+**gofmt was never a gate** (Phase 1). `cargo fmt --check` has been a gate since
+the first phase and its Go counterpart was simply missing; golangci-lint's
+default linter set does not include gofmt. `cli.go` had been carrying a double
+blank line. A formatter documented as a gate and not run as one is worse than no
+gate, because it is relied on. Both fixed.
+
+**The conformance suite was passing vacuously** (Phase 3). `conformance_test.py`
+keys its magic, version, and reserved-field checks by vector name. Renaming the
+manifest vectors from `_v1` to `_v2` left every manifest check looking up a key
+that no longer existed, and the suite still printed ALL CONFORMANCE TESTS
+PASSED. It now fails if a structure it claims to check is absent - verified by
+deleting a vector and watching it exit 1.
+
+**`conformance_test.py` ran nowhere at all** (Phase 3). `check_spec.py` has run
+in CI since Phase 3 and never in `gate.sh`; the conformance suite ran in neither.
+A suite nobody runs is a suite that rots, which is how the defect above survived.
+Both now run in the gate and in CI, which took the gate from 15 checks to 18
+(gofmt is the third).
+
+### The manifest header layout, and why the parse order changed
+
+Magic and version are now checked before the length. The header size is
+version-dependent - v1 is 168 bytes, v2 is 228 - so checking length first
+reported a complete v1 manifest as truncated. "Truncated: expected 228, got 168"
+sends an operator looking for lost bytes; "unsupported version 1" tells them to
+re-send. Only the five bytes those two checks read are required up front.
+
+### Deviation: 20 atomic commits
+
+The phase produced 20 commits, which meets the floor, but two of them are larger
+than the standard would like. `feat(codec): implement manifest v2` carries both
+the file flag byte and the header's session fields, because they are one
+wire-format version and splitting them would produce a commit that does not
+match the spec committed before it. `feat(cli): replace the unsigned transfer
+record` touches `keygen`, `send`, `recv`, `verify`, and `display` together,
+because `transfer.json` is read by four of them and removing it from three
+leaves a build that does not compile.
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+=== GATE: cargo fmt --check ===
+  PASS
+=== GATE: cargo clippy -D warnings ===
+  PASS
+=== GATE: cargo test ===
+  PASS
+=== GATE: cargo audit ===
+  PASS
+=== GATE: cargo deny ===
+  PASS
+=== GATE: ABI drift ===
+  PASS
+=== GATE: wire-format spec consistency ===
+  PASS
+=== GATE: golden vector conformance ===
+  PASS
+=== GATE: build rust core for cgo ===
+  PASS
+=== GATE: gofmt --check ===
+  PASS
+=== GATE: go vet ===
+  PASS
+=== GATE: go test -race ===
+  PASS
+=== GATE: go build ===
+  PASS
+=== GATE: golangci-lint ===
+  PASS
+=== GATE: govulncheck ===
+  PASS
+=== GATE: loopback end-to-end ===
+  PASS
+=== GATE: operations guide drill ===
+  PASS
+=== GATE: chaos soak (12 rounds) ===
+  PASS
+
+=== GATE SUMMARY ===
+  Passed: 18
+  Failed: 0
+ALL GATES PASSED
+```
+
+Rust test counts from the same run:
+
+```
+test result: ok. 284 passed; 0 failed  (dhow-codec)
+test result: ok. 110 passed; 0 failed  (dhow-crypt)
+test result: ok.  11 passed; 0 failed  (dhow-crypt end_to_end)
+test result: ok.  44 passed; 0 failed  (dhow-ffi)
+```
+
+The loopback harness, which now exercises the signature end to end:
+
+```
+$ scripts/loopback.sh 2 20
+  PASS  built dhow
+  PASS  built a 3 MiB fixture
+  PASS  generated operator keys and signing identities
+  PASS  sent 3320 frames in 0s
+  PASS  clean transfer round trips byte for byte
+  PASS  executable bit survived
+  PASS  recovered from 664 dropped frames
+  PASS  recovered from a contiguous outage of 553 frames
+  PASS  corrupted frames were rejected without poisoning the decode
+  PASS  resumed through two interruptions and round tripped byte for byte
+  PASS  tampered resume state and journal both fail closed
+  PASS  wrong key fails closed and writes nothing
+  PASS  a manifest signed by another identity fails closed and writes nothing
+  PASS  an altered manifest fails closed wherever it is altered
+  PASS  verify accepts a good dataset
+  PASS  verify rejects a dataset whose manifest was not signed by the expected identity
+  PASS  verify catches a single flipped byte in a good-looking dataset
+  PASS  verify rejects a damaged dataset
+  PASS  two sends of one dataset produce the same frame count
+
+=== LOOPBACK PASSED in 11s ===
+```
+
+### What this phase did not close
+
+`verify` still checks a signature against the key it is handed. A substituted
+`sender.pub` verifies successfully against whoever holds the matching secret,
+and nothing in the tool can close that - the control is the operator comparing
+the fingerprint out of band when the key first arrives. `docs/VERIFY.md` now
+says so in the section that used to describe the unsigned record.
+
+There is no revocation. An identity is trusted until the receiving operator
+deletes its `.pub` file.
+
 ## Phase 27 - Chaos and soak
 
 **Objective:** Every test so far picks the fault it injects. A harness that
