@@ -1203,7 +1203,12 @@ func runDisplay(env Env, args []string) error {
 	qrEcc := fs.String("qr-ecc", "M", "QR error correction: L, M, Q, or H")
 	noClear := fs.Bool("no-clear", false, "do not clear the terminal between frames")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	resolve := verbosityFlags(fs)
 	if err := fs.Parse(args); err != nil {
+		return &exitError{code: ExitUsage, err: err}
+	}
+	level, err := resolve()
+	if err != nil {
 		return &exitError{code: ExitUsage, err: err}
 	}
 	if len(*qrEcc) != 1 {
@@ -1258,6 +1263,9 @@ func runDisplay(env Env, args []string) error {
 		return failf(ExitInput, "displaying frames: %w", err)
 	}
 
+	if level == quiet && !*asJSON {
+		return nil
+	}
 	return emit(env.Stderr, *asJSON,
 		displayResult{
 			SessionID:   record.SessionID,
