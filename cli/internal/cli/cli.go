@@ -144,9 +144,21 @@ Commands:
 
 Run "dhow <command> -h" for the flags of a command.
 
-Exit codes:
-  0 success   1 usage   2 input   3 verification failed
-  4 incomplete   5 internal
+Common flags:
+  -json      machine-readable output on stdout
+  -quiet     print nothing but errors
+  -verbose   print progress and detail while working
+
+Exit codes (stable; a script may branch on these):
+  0  success
+  1  usage: a flag or argument was wrong
+  2  input: a file was missing, unreadable, or malformed
+  3  verification failed: a digest, MAC, or signature did not match
+  4  incomplete: not enough frames arrived; show the stream again
+  5  internal: a bug in dhow
+
+Only 4 is worth retrying unchanged. 2 and 3 mean something on disk is wrong,
+and repeating the command will reproduce them.
 `)
 }
 
