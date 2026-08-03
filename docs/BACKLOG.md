@@ -36,13 +36,14 @@ original failure.
 |-----|-------:|----------:|-------:|----------:|----------------|
 | seeds 7919, 15838, 23757, 31676 | 4 x 60 | 132 | 108 | 0 | no |
 | seeds 101, 202, 303, 404 | 4 x 150 | 381 | 219 | 0 | no |
+| seeds 1000003, 2718281, 31415926, 57721566 (Phase 28) | 4 x 500 | 1327 | 673 | 0 | no |
 
-960 rounds, none of which failed and none of which reported corruption.
+**2,960 rounds**, none of which failed and none of which reported corruption.
 
-That is not grounds for closing this. The original failure was seen once in
-120 rounds with data the harness could not replay, so the population being
-sampled now is not provably the same one. Absence here bounds how common it
-is, not whether it exists.
+That is still not grounds for closing this. The original failure was seen once
+in 120 rounds with data the harness could not replay, so the population being
+sampled now is not provably the same one. Absence here bounds how common it is,
+not whether it exists.
 
 What is known:
 
@@ -54,34 +55,31 @@ What is known:
 - No round has ever reported silent corruption, so whatever this is, it did not
   produce a wrong dataset.
 
+**Ruled out in Phase 28: umask.** `pack.writeFile` passes the mode to
+`os.OpenFile`, where the process umask applies, so a umask containing `0100`
+would strip the executable bit and produce the observed signature. A transfer
+of an executable file was run under umasks 0022, 0002, 0077, and 0027, and the
+bit survived every one; 0111 and 0177 could not be tested because they stop the
+harness creating its own fixture, and no shell runs with them. The harness runs
+under 0022. This does not rule out a `mode` cause, only this mechanism for one.
+
 Next steps for whoever picks this up:
 
-1. Soak hard with the seeded-data harness: `scripts/chaos.sh 2000`. The failure
-   message now includes `verify`'s JSON, which names the file and the problem
-   kind, and that alone distinguishes the two hypotheses above.
-2. If it is `mode`, look at extraction permissions and umask handling in
-   `cli/internal/pack`.
+1. Keep soaking with fresh seeds: `scripts/chaos.sh 500`. The failure message
+   includes `verify`'s JSON, which names the file and the problem kind, and
+   that alone distinguishes the two hypotheses above.
+2. If it is `mode`, look at extraction permissions in `cli/internal/pack`
+   beyond umask - the `O_EXCL` open, and `os.MkdirAll`'s directory modes.
 3. If it is `content`, treat it as a correctness bug in the streaming digest
    path (`dhow_hasher_*` and `pack.writeEntry`) and stop shipping until it is
    understood.
 
+Note that Phase 28 moved the inventory into the signed manifest. That changes
+nothing about this defect: the digests are still produced by `pack.writeEntry`
+from the same stream, and the executable bit still comes from the same
+`d.Info()` call. If the cause is in either, it survived the change.
+
 ## Deferred
-
-### B-2: the signed manifest is not wired to the CLI (Phase 25)
-
-`dhow-crypt` implements manifest signing and verification, `Policy`, and
-`VerifiedManifest`, and none of it is reachable from the command line. `send`
-writes an unsigned `transfer.json` beside the frames, and `verify` checks
-against that.
-
-The consequence is stated in `docs/VERIFY.md`: verify answers "does this
-dataset still match the record?" and not "was this produced by someone holding
-the operator key?" Anyone who can edit the dataset can usually edit the record
-beside it.
-
-Closing this needs an FFI surface for identity handles and for manifest build
-and verify, then replacing the transfer record with the signed manifest
-carried in the frame stream.
 
 ### B-3: camera capture and QR detection do not exist
 
@@ -102,3 +100,31 @@ on stable.
 Recorded in `docs/UX-REVIEW.md`: no ETA or progress bar, `send` is silent while
 packing a large dataset, no `--dry-run`, and no config file or environment
 overrides.
+
+### B-6: `send` holds the whole payload in memory (Phase 28)
+
+`runSend` packs the dataset into a `strings.Builder` and hands the result to
+the encoder as one `[]byte`, so peak memory is at least the size of the
+archive. The manifest work did not change this and does not make it worse, but
+it is the first thing a receiver-side RSS budget will hit, and it is a design
+issue rather than a tuning one: `pack.Create` streams, and the CLI immediately
+un-streams it.
+
+Phase 31 establishes the budget. Fixing this means an encoder that takes a
+reader, which is an FFI change.
+
+## Closed
+
+### B-2: the signed manifest is not wired to the CLI (Phase 25, closed Phase 28)
+
+`dhow-crypt` implemented manifest signing and verification, `Policy`, and
+`VerifiedManifest`, and none of it was reachable from the command line. `send`
+wrote an unsigned `transfer.json` beside the frames and `verify` checked
+against that, so anyone who could edit the dataset could edit the record beside
+it.
+
+Closed by Phase 28: an FFI surface for identity handles and for manifest build
+and verify, manifest wire format v2 carrying the salt, nonce, coding
+parameters, and per-file executable bits, and `keygen -kind identity`, `send
+-identity`, and `recv`/`verify`/`display -signer`. `transfer.json` is deleted,
+not deprecated.
