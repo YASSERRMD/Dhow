@@ -11,7 +11,7 @@ captured so far is lost and the sender has to run the whole stream again.
 ## Using it
 
 ```bash
-dhow recv -key operator.key -in frames -out received -state .dhow-state
+dhow recv -key operator.key -signer sender.pub -in frames -out received -state .dhow-state
 ```
 
 If the receive is interrupted, run exactly the same command again. It replays
