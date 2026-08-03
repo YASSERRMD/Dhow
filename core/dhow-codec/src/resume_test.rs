@@ -474,7 +474,10 @@ fn test_golden_full_resume_parses_and_re_serializes_byte_for_byte() {
         .enumerate()
     {
         let entry = &file.entries()[index];
-        assert_eq!(u64::from(entry.block_index), expected["block_index"].as_u64().unwrap());
+        assert_eq!(
+            u64::from(entry.block_index),
+            expected["block_index"].as_u64().unwrap()
+        );
         assert_eq!(
             u64::from(entry.symbol_count),
             expected["symbol_count"].as_u64().unwrap()

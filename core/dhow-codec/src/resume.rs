@@ -159,11 +159,11 @@ impl BlockEntry {
         // A hostile symbol_count would otherwise size an allocation. Bound it
         // by what is actually present before reserving anything.
         let bitmap_len = (symbol_count as usize).div_ceil(8);
-        let end = BLOCK_ENTRY_HEADER_SIZE
-            .checked_add(bitmap_len)
-            .ok_or(ResumeError::InvalidSymbolCount {
+        let end = BLOCK_ENTRY_HEADER_SIZE.checked_add(bitmap_len).ok_or(
+            ResumeError::InvalidSymbolCount {
                 count: symbol_count,
-            })?;
+            },
+        )?;
         if bytes.len() < end {
             return Err(ResumeError::Truncated {
                 expected: end,

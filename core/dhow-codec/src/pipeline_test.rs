@@ -590,7 +590,11 @@ fn test_held_bitmap_names_the_symbols_that_arrived() {
             Some(want.len() as u32),
             "block {block} held count"
         );
-        assert_eq!(popcount(bitmap), want.len() as u32, "block {block} bit count");
+        assert_eq!(
+            popcount(bitmap),
+            want.len() as u32,
+            "block {block} bit count"
+        );
 
         for symbol in 0..params.total_symbols_per_block {
             assert_eq!(
@@ -756,7 +760,10 @@ fn test_resume_state_survives_a_write_read_and_replay() {
     let journal_bytes: u64 = taken.iter().map(|f| f.len() as u64).sum();
 
     let before = replay(params, &taken);
-    assert!(!before.is_complete(), "the test needs an unfinished transfer");
+    assert!(
+        !before.is_complete(),
+        "the test needs an unfinished transfer"
+    );
 
     // Round-trip the state through bytes, which is what a restart really does.
     let saved = before.resume_state(journal_bytes).to_vec();
@@ -793,7 +800,11 @@ fn test_resume_state_counts_match_the_decoder() {
 
     assert_eq!(state.entries().len(), params.block_count as usize);
     let total: u32 = state.entries().iter().map(|e| e.symbols_held).sum();
-    assert_eq!(total, taken.len() as u32, "every frame must be accounted for");
+    assert_eq!(
+        total,
+        taken.len() as u32,
+        "every frame must be accounted for"
+    );
 
     for entry in state.entries() {
         assert_eq!(entry.symbol_count, params.total_symbols_per_block);
