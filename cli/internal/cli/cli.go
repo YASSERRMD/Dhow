@@ -284,6 +284,39 @@ func runKeygen(env Env, args []string) error {
 			"keep this file secret; both operators need the same key\n", *out))
 }
 
+
+// loadKey opens the operator key, turning the core's diagnosis into an
+// instruction.
+//
+// The two ways this fails in practice are a path that is wrong and a file
+// whose permissions are wrong, and the fix for each is a single command. An
+// operator reading "invalid key data: cannot stat key file" has been told what
+// happened and not what to do about it, which is the difference between an
+// error message and a useful one.
+func loadKey(path string) (*ffi.Key, error) {
+	key, err := ffi.LoadKey(path)
+	if err == nil {
+		return key, nil
+	}
+
+	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+		return nil, failf(ExitInput,
+			"no operator key at %s; generate one with \"dhow keygen -out %s\", "+
+				"or pass -key with the path to the key both operators share",
+			path, path)
+	}
+
+	if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm()&0o077 != 0 {
+		return nil, failf(ExitInput,
+			"%s is readable by other users (mode %04o); dhow refuses to load a key "+
+				"anyone else can read. Fix it with \"chmod 600 %s\", and consider the "+
+				"key compromised if the machine is shared",
+			path, info.Mode().Perm(), path)
+	}
+
+	return nil, failf(ExitInput, "loading %s: %w", path, err)
+}
+
 // --- send ---
 
 type sendResult struct {
@@ -376,9 +409,9 @@ func runSend(env Env, args []string) error {
 	}
 	payload := []byte(archive.String())
 
-	key, err := ffi.LoadKey(*keyPath)
+	key, err := loadKey(*keyPath)
 	if err != nil {
-		return failf(ExitInput, "loading %s: %w", *keyPath, err)
+		return err
 	}
 	defer key.Close()
 
@@ -559,9 +592,9 @@ func runRecv(env Env, args []string) error {
 		return err
 	}
 
-	key, err := ffi.LoadKey(*keyPath)
+	key, err := loadKey(*keyPath)
 	if err != nil {
-		return failf(ExitInput, "loading %s: %w", *keyPath, err)
+		return err
 	}
 	defer key.Close()
 
