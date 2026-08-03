@@ -797,6 +797,43 @@ pub unsafe extern "C" fn dhow_decoder_free(decoder: *mut DhowDecoder) {
     drop(unsafe { Box::from_raw(decoder) });
 }
 
+// --- Digests ---
+
+/// Computes the BLAKE3 digest of a byte range.
+///
+/// Exposed so a caller does not need its own BLAKE3. The digests that decide
+/// whether a transfer verified are computed by this library; a second
+/// implementation on the calling side would be a second thing to be wrong, and
+/// the two would disagree silently rather than loudly.
+///
+/// `data` must be non-null even for a zero-length input, matching every other
+/// buffer argument in this API; a caller hashing nothing passes any valid
+/// pointer with a length of zero.
+///
+/// # Safety
+///
+/// `data` must point to `len` readable bytes, and `out` must point to 32
+/// writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dhow_blake3(data: *const u8, len: usize, out: *mut u8) -> DhowStatus {
+    guard(|| {
+        clear_last_error();
+        if out.is_null() {
+            return fail(DhowStatus::NullArgument, "output pointer was null");
+        }
+        // SAFETY: forwarded from this function's own contract.
+        let Some(data) = (unsafe { slice_from(data, len) }) else {
+            return fail(DhowStatus::NullArgument, "data pointer was null");
+        };
+
+        let digest = blake3_digest(data);
+        // SAFETY: the caller guarantees 32 writable bytes at `out`, and the
+        // source is a local array that cannot overlap it.
+        unsafe { std::ptr::copy_nonoverlapping(digest.as_ptr(), out, 32) };
+        DhowStatus::Ok
+    })
+}
+
 // --- QR encoding ---
 
 /// Reports how many bytes one QR code holds at `version` and `ecc`.

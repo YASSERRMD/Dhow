@@ -31,7 +31,7 @@
  * compatible. A caller that links against a mismatched version should refuse
  * to run rather than guess.
  */
-#define DHOW_ABI_VERSION 2
+#define DHOW_ABI_VERSION 3
 
 /**
  * Status returned by every `dhow_*` entry point.
@@ -441,6 +441,25 @@ DhowStatus dhow_decoder_resume_verify(const DhowDecoder *decoder,
  * freed.
  */
 void dhow_decoder_free(DhowDecoder *decoder);
+
+/**
+ * Computes the BLAKE3 digest of a byte range.
+ *
+ * Exposed so a caller does not need its own BLAKE3. The digests that decide
+ * whether a transfer verified are computed by this library; a second
+ * implementation on the calling side would be a second thing to be wrong, and
+ * the two would disagree silently rather than loudly.
+ *
+ * `data` must be non-null even for a zero-length input, matching every other
+ * buffer argument in this API; a caller hashing nothing passes any valid
+ * pointer with a length of zero.
+ *
+ * # Safety
+ *
+ * `data` must point to `len` readable bytes, and `out` must point to 32
+ * writable bytes.
+ */
+DhowStatus dhow_blake3(const uint8_t *data, uintptr_t len, uint8_t *out);
 
 /**
  * Reports how many bytes one QR code holds at `version` and `ecc`.
