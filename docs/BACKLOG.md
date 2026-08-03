@@ -87,13 +87,27 @@ Frames move between the two halves through a directory. Everything above the
 optical layer is exercised end to end without hardware, but the tool cannot yet
 run across a real air gap. `README.md` and `docs/OPERATIONS.md` both say so.
 
-### B-4: no fuzzing targets
+### B-7: no fuzz target reaches `dhow-ffi` (Phase 29)
 
-`cargo-fuzz` targets for frame decode, manifest verify, and resume load are
-specified and not built. Blocked on toolchain: `cargo-fuzz` requires nightly
-Rust while `rust-toolchain.toml` pins stable. Resolve that first — either a
-second pinned nightly for the fuzz job alone, or a fuzzing approach that runs
-on stable.
+Phase 29 built five targets, all of which exercise `dhow-codec` and
+`dhow-crypt`. Both carry `#![forbid(unsafe_code)]`, so the memory errors a
+sanitizer exists to catch cannot be written in them.
+
+`dhow-ffi` is the one crate where `unsafe` is permitted, it is where every
+caller pointer is dereferenced and every caller buffer is written, and nothing
+fuzzes it. Its unit tests cover null handles, out-of-range indices, and the
+two-call size convention, which is the set somebody thought of.
+
+What this needs is a target that drives the handle lifecycle with a fuzzer
+choosing the sequence — create, feed, poll, finish, free, in arbitrary order,
+with buffers deliberately one byte short — rather than one that feeds bytes to
+a parser. That is closer to Phase 34's structured decoder fuzzing than to
+Phase 29's parser targets, which is why it was not folded into this phase.
+
+Note that AddressSanitizer is disabled on macOS (`docs/FUZZING.md` explains
+why), so an FFI target written today would run without a sanitizer on a
+developer machine and with one in CI. That asymmetry matters more for `dhow-ffi`
+than for anything fuzzed so far.
 
 ### B-5: operator UX gaps
 
@@ -114,6 +128,26 @@ Phase 31 establishes the budget. Fixing this means an encoder that takes a
 reader, which is an FFI change.
 
 ## Closed
+
+### B-4: no fuzzing targets (Phase 2, closed Phase 29)
+
+`cargo-fuzz` targets were specified in Phase 2 and not built, blocked on a
+toolchain question with three plausible answers and no recorded decision.
+
+Closed by Phase 29: the decision is a second nightly pinned to a date and
+scoped to `fuzz/` alone, recorded in `docs/FUZZING.md` along with what was
+rejected and why. Five targets - `frame_decode`, `session_header`,
+`manifest_entry`, `manifest_verify`, `resume_load` - each asserting the
+invariants its parser promises rather than only that it did not crash. Corpora
+are derived from `proto/vectors.json` by `scripts/seed_corpus.py`, so a
+wire-format change regenerates them, and the minimized corpus is committed under
+`fuzz/seeds/` and replayed on stable by `dhow-codec`'s `replay_test`. A bounded pass runs in the gate and in CI.
+
+The targets were shown to bite: `validate_name` was removed from
+`FileEntry::from_bytes` on a scratch working tree, and `manifest_entry` found a
+name containing a backslash and failed within thirty seconds.
+
+See B-7 for what the targets still do not reach.
 
 ### B-2: the signed manifest is not wired to the CLI (Phase 25, closed Phase 28)
 

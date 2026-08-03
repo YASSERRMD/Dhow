@@ -27,6 +27,22 @@ process for contributing.
 - Do not commit secrets, keys, or credentials.
 - All cryptographic code must use audited primitives.
 
+## Fuzzing
+
+`scripts/fuzz.sh` runs the `cargo-fuzz` targets over the parsers. The gate runs
+ten seconds per target and CI runs 120; neither is a search.
+
+Search like this:
+
+```bash
+scripts/fuzz.sh 3600
+```
+
+It needs a second toolchain, and [docs/FUZZING.md](docs/FUZZING.md) explains why
+that is the shape of the answer, what was rejected, and what it costs. When a
+target finds something, the input goes in `fuzz/seeds/` and the fix goes in the
+same commit.
+
 ## Soaking
 
 `scripts/chaos.sh` runs randomised fault-injection rounds against the shipped

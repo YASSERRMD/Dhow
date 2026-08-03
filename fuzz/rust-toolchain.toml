@@ -1,0 +1,13 @@
+# cargo-fuzz needs nightly: it builds with -Z sanitizer=address and links
+# libfuzzer-sys, and neither exists on stable. The rest of the repository stays
+# on the stable pin in ../rust-toolchain.toml, because rustup resolves the
+# nearest toolchain file walking up from the working directory.
+#
+# The date is pinned rather than tracking the `nightly` channel. A floating
+# channel means a fuzz run that compiled yesterday can fail today for reasons
+# unrelated to the code, which is what teaches people to ignore a job.
+#
+# See docs/FUZZING.md for why this rather than a stable-only fuzzer.
+[toolchain]
+channel = "nightly-2025-12-14"
+components = ["rust-src"]

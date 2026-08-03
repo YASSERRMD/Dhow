@@ -1,0 +1,63 @@
+# Fuzz targets for the Dhow core.
+#
+# A separate crate, deliberately outside the `core/` workspace: a libfuzzer
+# target only builds on nightly with a sanitizer, and a stable
+# `cargo test --all-targets` in core/ must never try to compile one.
+[package]
+name = "dhow-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "BUSL-1.1"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+dhow-codec = { path = "../core/dhow-codec" }
+dhow-crypt = { path = "../core/dhow-crypt" }
+# Used by manifest_verify to re-check a signature independently of the code
+# under test. A verifier checked only by itself is not checked.
+ed25519-dalek = "2"
+
+# Symbols are what make a crash report readable, and a fuzz build is not
+# shipped, so there is no reason to strip them.
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "frame_decode"
+path = "fuzz_targets/frame_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "session_header"
+path = "fuzz_targets/session_header.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "manifest_entry"
+path = "fuzz_targets/manifest_entry.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "manifest_verify"
+path = "fuzz_targets/manifest_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "resume_load"
+path = "fuzz_targets/resume_load.rs"
+test = false
+doc = false
+bench = false
