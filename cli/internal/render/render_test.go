@@ -128,7 +128,10 @@ func TestImageModulesMatchTheGrid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Image: %v", err)
 	}
-	pal := img.(*image.Paletted)
+	pal, ok := img.(*image.Paletted)
+	if !ok {
+		t.Fatalf("Image returned %T, want *image.Paletted", img)
+	}
 
 	for y := range qr.Size {
 		for x := range qr.Size {
@@ -152,7 +155,10 @@ func TestImageQuietZoneIsLight(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Image: %v", err)
 	}
-	pal := img.(*image.Paletted)
+	pal, ok := img.(*image.Paletted)
+	if !ok {
+		t.Fatalf("Image returned %T, want *image.Paletted", img)
+	}
 	total := (qr.Size + 2*QuietZone) * scale
 
 	for i := range total {
