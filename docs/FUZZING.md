@@ -1,0 +1,120 @@
+# Fuzzing
+
+> Part of the [Contributing guide](../CONTRIBUTING.md).
+
+Every parser in `dhow-codec` handles input an attacker chooses. Frames arrive
+off a camera, a manifest arrives beside them, and a resume file is read from
+storage the tool does not own. The unit tests cover the malformed inputs
+somebody thought of. Fuzzing covers the ones nobody did.
+
+## The toolchain decision
+
+`cargo-fuzz` requires a nightly compiler: it builds targets with `-Z
+sanitizer=address` and links `libfuzzer-sys`, and neither is available on
+stable. `rust-toolchain.toml` pins stable 1.97.0 for the whole workspace, so
+the two cannot both be satisfied by one toolchain file.
+
+**The decision: a second pinned nightly, scoped to the fuzz crate alone.**
+
+`fuzz/rust-toolchain.toml` pins `nightly-2025-12-14`. Nothing else in the
+repository sees it: `rustup` resolves the toolchain from the nearest
+`rust-toolchain.toml` walking up from the working directory, so `cargo build`
+in `core/` still gets stable 1.97.0 and `scripts/gate.sh` is unaffected. The
+fuzz crate is also excluded from the `core/` workspace, so a stable `cargo
+test --all-targets` never tries to compile a libfuzzer target.
+
+### What was rejected, and why
+
+**A stable-only fuzzer.** `honggfuzz-rs` runs on stable and would have avoided
+the second toolchain. It was rejected because it needs the honggfuzz binary
+built from C sources at install time, which trades a Rust toolchain pin for a C
+build dependency — a worse trade for a project whose entire non-Go surface is
+Rust, and one that moves the fragility from a version number to a build that
+either works on the machine or does not.
+
+**A hand-rolled corpus replayer on stable.** Deterministic, no extra toolchain,
+and not fuzzing: without coverage instrumentation, a mutation harness explores
+the input space by luck. It would have satisfied the letter of B-4 and none of
+its purpose.
+
+**Floating `nightly` rather than a dated one.** A floating channel means a fuzz
+run that passed yesterday can fail to compile today for reasons unrelated to
+the code, which is the failure mode that teaches people to ignore a job. The
+date is pinned and is bumped deliberately.
+
+### The cost of the decision
+
+The pinned nightly is 1.94.0-nightly, which is *older* than the pinned stable.
+That is fine today — the core compiles on both — and it will not stay fine
+forever. When the core starts using something the pinned nightly does not have,
+the nightly moves forward, and that is a deliberate commit rather than a
+surprise. `scripts/fuzz.sh` fails with a message naming the toolchain if it is
+not installed, so the failure is a one-line fix rather than a puzzle.
+
+## Running it
+
+Install the tooling once:
+
+```bash
+rustup toolchain install nightly-2025-12-14 --profile minimal
+cargo install cargo-fuzz --locked
+```
+
+Then, from the repository root:
+
+```bash
+scripts/fuzz.sh                 # every target, 60s each
+scripts/fuzz.sh 300             # every target, 300s each
+scripts/fuzz.sh 300 frame_decode   # one target
+```
+
+The script seeds each target's corpus from `proto/vectors.json` before it runs,
+so a fresh clone starts from valid structures rather than from noise. A parser
+reached only through a correct 46-byte header and a correct CRC is a parser a
+fuzzer starting from random bytes will not reach this side of a heat death.
+
+## The targets
+
+| Target | What it parses | Why it is hostile input |
+|--------|----------------|-------------------------|
+| `frame_decode` | `Frame::from_bytes` | Every frame comes off a camera pointed at a screen anyone can stand in front of. |
+| `manifest_verify` | `Manifest::from_bytes`, then signature verification | The manifest is the receiver's first sight of a transfer and decides what it extracts. |
+| `resume_load` | `ResumeFile::from_bytes` | Read from local storage, which a compromised receiver controls. |
+| `session_header` | `SessionHeader::from_bytes` | Unsigned framing that configures the decoder. |
+| `manifest_entry` | `FileEntry::from_bytes` | The path-traversal surface, reached with an attacker-chosen length prefix. |
+
+Each target asserts the invariants the parser promises, not merely that it did
+not crash:
+
+- **No panic** on any input. A panic in the core is a bug; a panic across the
+  FFI boundary is undefined behaviour and a release blocker.
+- **No unbounded allocation.** A declared count or length may never drive an
+  allocation before it has been checked against what the buffer could hold.
+- **Round-trip fidelity.** Anything that parses successfully must re-serialize
+  to the bytes it was parsed from. A parser that accepts input it cannot
+  reproduce is one that is discarding something.
+- **Verification means verification.** `manifest_verify` asserts that any input
+  it accepts really does carry a signature over its own bytes.
+
+## When a target finds something
+
+`cargo-fuzz` writes the input to `fuzz/artifacts/<target>/`. Reproduce it with:
+
+```bash
+cd fuzz && cargo +nightly-2025-12-14 fuzz run <target> artifacts/<target>/<file>
+```
+
+Then: add the input to `fuzz/corpus/<target>/`, write a unit test in the crate
+that owns the parser reproducing it, fix it, and commit the test in the same
+change as the fix. A crash found by fuzzing and fixed without a regression test
+is a crash that will come back.
+
+## What the gate runs, and what it does not
+
+`scripts/gate.sh` runs a short bounded pass — seconds per target, not minutes —
+because a gate that takes an hour is a gate people skip. Its job is to prove
+the targets still build and still run, not to search.
+
+Searching is `scripts/fuzz.sh 3600` on a machine with time to spare. The
+cumulative hours actually run are recorded in `docs/phase-log.md`, honestly,
+including when they fall short of what the phase pack asked for.
