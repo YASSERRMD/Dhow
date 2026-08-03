@@ -25,7 +25,7 @@ mod pipeline_test;
 pub mod qr;
 #[cfg(test)]
 mod qr_test;
-/// Replays the committed fuzz regression inputs on the stable toolchain.
+/// Replays the committed fuzz corpus on the stable toolchain.
 #[cfg(test)]
 mod replay_test;
 pub mod resume;

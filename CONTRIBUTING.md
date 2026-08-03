@@ -40,8 +40,8 @@ scripts/fuzz.sh 3600
 
 It needs a second toolchain, and [docs/FUZZING.md](docs/FUZZING.md) explains why
 that is the shape of the answer, what was rejected, and what it costs. When a
-target finds something, the input goes in `fuzz/regressions/` and the fix goes in
-the same commit.
+target finds something, the input goes in `fuzz/seeds/` and the fix goes in the
+same commit.
 
 ## Soaking
 

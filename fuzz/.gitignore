@@ -1,7 +1,8 @@
-# Corpora and crash artifacts are generated, not authored. regressions/ is
-# not here on purpose: it is curated, committed, and replayed on stable by
-# dhow-codec's replay_test, so an input that once broke a parser is checked by
-# everyone on every run rather than only where cargo-fuzz is installed.
+# The working corpus and crash artifacts are generated, not authored. seeds/ is
+# not here on purpose: it is the minimized corpus, committed, and replayed on
+# stable by dhow-codec's replay_test, so the inputs that reach the interesting
+# code are checked by everyone on every run rather than only where cargo-fuzz
+# is installed.
 corpus/
 artifacts/
 coverage/

@@ -80,13 +80,13 @@ echo
 echo "seeding corpora from proto/vectors.json"
 python3 "$ROOT/scripts/seed_corpus.py"
 
-# The committed regression inputs go into the corpus too. An input that once
-# broke a parser is the most interesting starting point there is, and leaving it
-# out would mean the fuzzer relearns the neighbourhood from scratch every run.
+# The committed minimized corpus goes in too. Each of those inputs reached code
+# the others did not, so starting without them means relearning the whole map
+# from scratch on every run.
 for target in "${TARGETS[@]}"; do
-    if [ -d "$ROOT/fuzz/regressions/$target" ]; then
+    if [ -d "$ROOT/fuzz/seeds/$target" ]; then
         mkdir -p "$ROOT/fuzz/corpus/$target"
-        cp "$ROOT/fuzz/regressions/$target"/*.bin "$ROOT/fuzz/corpus/$target/" 2>/dev/null || true
+        cp "$ROOT/fuzz/seeds/$target"/*.bin "$ROOT/fuzz/corpus/$target/" 2>/dev/null || true
     fi
 done
 echo
@@ -125,7 +125,7 @@ if [ "$FAILED" -gt 0 ]; then
     # reproducing their crash, which is the exact trap docs/FUZZING.md exists
     # to warn about.
     echo "  cargo +${TOOLCHAIN} fuzz run --fuzz-dir $ROOT/fuzz -s ${SANITIZER} <target> <artifact>" >&2
-    echo "Then copy the artifact into fuzz/regressions/<target>/ and fix it there." >&2
+    echo "Then copy the artifact into fuzz/seeds/<target>/ and fix it there." >&2
     exit 1
 fi
 

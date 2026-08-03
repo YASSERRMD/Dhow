@@ -140,7 +140,8 @@ rejected and why. Five targets - `frame_decode`, `session_header`,
 `manifest_entry`, `manifest_verify`, `resume_load` - each asserting the
 invariants its parser promises rather than only that it did not crash. Corpora
 are derived from `proto/vectors.json` by `scripts/seed_corpus.py`, so a
-wire-format change regenerates them. A bounded pass runs in the gate and in CI.
+wire-format change regenerates them, and the minimized corpus is committed under
+`fuzz/seeds/` and replayed on stable by `dhow-codec`'s `replay_test`. A bounded pass runs in the gate and in CI.
 
 The targets were shown to bite: `validate_name` was removed from
 `FileEntry::from_bytes` on a scratch working tree, and `manifest_entry` found a

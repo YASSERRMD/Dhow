@@ -1,22 +1,23 @@
-//! Replays the committed fuzz regression inputs on stable.
+//! Replays the committed fuzz corpus on stable.
 //!
 //! The fuzz targets in `fuzz/` need a nightly toolchain and `cargo-fuzz`, and
 //! `scripts/gate.sh` skips them when either is missing. That is the right
-//! behaviour for a search, and the wrong behaviour for a *regression*: an input
-//! that once crashed a parser must be checked on every run, by everyone, with
-//! the toolchain everyone has.
+//! behaviour for a *search* and the wrong behaviour for a *regression*: an
+//! input that once broke a parser must be checked on every run, by everyone,
+//! with the toolchain everyone has.
 //!
-//! So the invariants the fuzz targets assert are asserted here too, over the
-//! inputs in `fuzz/regressions/`. The two are deliberately duplicated rather
-//! than shared: the fuzz crate cannot be a dependency of this one, and a
-//! regression check that only runs where the fuzzer runs is a regression check
-//! that was not needed.
+//! `fuzz/seeds/` is the committed, minimized corpus - the inputs libFuzzer kept
+//! because each one reached code the others did not. The invariants the fuzz
+//! targets assert are asserted here too, over those inputs. The duplication is
+//! deliberate: the fuzz crate cannot be a dependency of this one, and a check
+//! that only runs where the fuzzer runs is a check that was not needed.
 //!
 //! # Adding to this
 //!
-//! When a fuzz target finds something, copy the artifact into
-//! `fuzz/regressions/<target>/` and fix the parser in the same change. The
-//! input is then replayed here forever, on stable, in the default gate.
+//! When a fuzz target finds a crash, copy the artifact into
+//! `fuzz/seeds/<target>/` and fix the parser in the same change. The input is
+//! then replayed here forever, on stable, in the default gate - which is what
+//! stops the crash coming back on a machine without nightly.
 
 use crate::frame::{FRAME_HEADER_SIZE, FrameHeader};
 use crate::manifest::{FileEntry, MANIFEST_HEADER_SIZE, MANIFEST_MAGIC, Manifest};
@@ -30,9 +31,9 @@ use std::path::PathBuf;
 /// A missing directory is a failure rather than an empty iteration. A replay
 /// test that silently checks nothing is the failure mode this file exists to
 /// avoid, and it is one this repository has shipped before.
-fn regressions(target: &str) -> Vec<(String, Vec<u8>)> {
+fn seeds(target: &str) -> Vec<(String, Vec<u8>)> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fuzz/regressions")
+        .join("../../fuzz/seeds")
         .join(target);
 
     let entries = fs::read_dir(&dir)
@@ -51,15 +52,15 @@ fn regressions(target: &str) -> Vec<(String, Vec<u8>)> {
 
     assert!(
         !entries.is_empty(),
-        "no regression inputs in {}; this test would pass without checking anything",
+        "no inputs in {}; this test would pass without checking anything",
         dir.display()
     );
     entries
 }
 
 #[test]
-fn frame_header_regressions_round_trip() {
-    for (name, data) in regressions("frame_decode") {
+fn frame_header_seeds_round_trip() {
+    for (name, data) in seeds("frame_decode") {
         let Ok(header) = FrameHeader::from_bytes(&data) else {
             continue;
         };
@@ -74,8 +75,8 @@ fn frame_header_regressions_round_trip() {
 }
 
 #[test]
-fn session_header_regressions_round_trip() {
-    for (name, data) in regressions("session_header") {
+fn session_header_seeds_round_trip() {
+    for (name, data) in seeds("session_header") {
         let Ok(header) = SessionHeader::from_bytes(&data) else {
             continue;
         };
@@ -102,8 +103,8 @@ fn session_header_regressions_round_trip() {
 }
 
 #[test]
-fn manifest_entry_regressions_are_safe_to_extract() {
-    for (name, data) in regressions("manifest_entry") {
+fn manifest_entry_seeds_are_safe_to_extract() {
+    for (name, data) in seeds("manifest_entry") {
         let Ok((entry, consumed)) = FileEntry::from_bytes(&data) else {
             continue;
         };
@@ -138,8 +139,8 @@ fn manifest_entry_regressions_are_safe_to_extract() {
 }
 
 #[test]
-fn manifest_regressions_describe_themselves() {
-    for (name, data) in regressions("manifest_verify") {
+fn manifest_seeds_describe_themselves() {
+    for (name, data) in seeds("manifest_verify") {
         let Ok(manifest) = Manifest::from_bytes(&data) else {
             continue;
         };
@@ -172,8 +173,8 @@ fn manifest_regressions_describe_themselves() {
 }
 
 #[test]
-fn resume_regressions_account_for_every_byte() {
-    for (name, data) in regressions("resume_load") {
+fn resume_seeds_account_for_every_byte() {
+    for (name, data) in seeds("resume_load") {
         let Ok(file) = ResumeFile::from_bytes(&data) else {
             continue;
         };
