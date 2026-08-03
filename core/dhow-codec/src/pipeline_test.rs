@@ -470,3 +470,82 @@ fn test_accessors_return_construction_values() {
     assert_eq!(decoder.session_id(), SESSION);
     assert_eq!(decoder.params().payload_size, 128);
 }
+
+#[test]
+fn test_frames_are_interleaved_across_blocks() {
+    // Emitting block by block would put every frame of block 0 at the front of
+    // the stream. Interleaving means consecutive frames come from different
+    // blocks.
+    let payload = payload_of(8192);
+    let params = params_for(&payload, 4, 4);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode(&payload)
+        .unwrap();
+
+    let first_four: Vec<u32> = frames
+        .iter()
+        .take(4)
+        .map(|f| f.frame.header().block_index())
+        .collect();
+    assert_eq!(
+        first_four,
+        vec![0, 1, 2, 3],
+        "the stream opens with consecutive frames from the same block"
+    );
+}
+
+#[test]
+fn test_decode_survives_a_contiguous_outage() {
+    // A camera refocusing, or an operator stepping in front of the screen,
+    // drops a run of consecutive frames. RaptorQ repairs within a block and
+    // never across blocks, so if that run fell entirely inside one block no
+    // repair overhead could recover it. Interleaving is what makes this
+    // survivable.
+    let payload = payload_of(16384);
+    let params = params_for(&payload, 4, 24);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode_to_bytes(&payload)
+        .unwrap();
+
+    let outage = frames.len() / 5;
+    let start = frames.len() / 3;
+    let surviving: Vec<Vec<u8>> = frames
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| *i < start || *i >= start + outage)
+        .map(|(_, f)| f)
+        .collect();
+
+    let mut decoder = PipelineDecoder::new(SESSION, params, KEY).unwrap();
+    for frame in &surviving {
+        decoder.accept(frame).unwrap();
+    }
+    assert!(
+        decoder.is_complete(),
+        "a contiguous outage of {outage} frames was not recoverable"
+    );
+    assert_eq!(decoder.finish().unwrap(), payload);
+}
+
+#[test]
+fn test_interleaving_preserves_every_frame() {
+    // Blocks differ in length when the payload does not divide evenly, so the
+    // interleave must not stop at the shortest block and drop the remainder.
+    let payload = payload_of(5000);
+    let params = params_for(&payload, 3, 5);
+    let frames = Pipeline::new(SESSION, params, KEY)
+        .unwrap()
+        .encode(&payload)
+        .unwrap();
+
+    let mut per_block = std::collections::HashMap::new();
+    for f in &frames {
+        *per_block.entry(f.frame.header().block_index()).or_insert(0) += 1;
+    }
+    assert_eq!(per_block.len(), 3, "not every block produced frames");
+    for (block, count) in &per_block {
+        assert!(*count > 0, "block {block} produced no frames");
+    }
+}
