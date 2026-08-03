@@ -111,8 +111,12 @@ fn run_job(line: &str) -> Result<JobResult, String> {
     let session_id: [u8; 16] = fixed(fields[1], "session id")?;
     let salt: [u8; 32] = fixed(fields[2], "salt")?;
     let nonce: [u8; 24] = fixed(fields[3], "nonce")?;
-    let symbol_size: u32 = fields[4].parse().map_err(|_| "bad symbol size".to_string())?;
-    let block_count: u32 = fields[5].parse().map_err(|_| "bad block count".to_string())?;
+    let symbol_size: u32 = fields[4]
+        .parse()
+        .map_err(|_| "bad symbol size".to_string())?;
+    let block_count: u32 = fields[5]
+        .parse()
+        .map_err(|_| "bad block count".to_string())?;
     let source: u32 = fields[6]
         .parse()
         .map_err(|_| "bad source symbol count".to_string())?;
@@ -128,15 +132,11 @@ fn run_job(line: &str) -> Result<JobResult, String> {
     // Exactly what dhow_encoder_new does, through the library rather than the
     // ABI. The order matters: derive, encrypt, then take the size and digest
     // from the ciphertext, because framing operates on ciphertext.
-    let key = load_operator(key_path).map_err(|e| format!("loading {}: {e}", key_path.display()))?;
+    let key =
+        load_operator(key_path).map_err(|e| format!("loading {}: {e}", key_path.display()))?;
     let keys = TransferKeys::derive(&key, &Salt::from_bytes(salt)).map_err(|e| e.to_string())?;
-    let ciphertext = encrypt_payload(
-        &keys,
-        &Nonce::from_bytes(nonce),
-        &session_id,
-        &payload,
-    )
-    .map_err(|e| e.to_string())?;
+    let ciphertext = encrypt_payload(&keys, &Nonce::from_bytes(nonce), &session_id, &payload)
+        .map_err(|e| e.to_string())?;
 
     let params = SessionParams {
         payload_size: ciphertext.len() as u64,
@@ -166,13 +166,8 @@ fn run_job(line: &str) -> Result<JobResult, String> {
         let _ = decoder.accept(frame);
     }
     let recovered = decoder.finish().map_err(|e| e.to_string())?;
-    let decoded = decrypt_payload(
-        &keys,
-        &Nonce::from_bytes(nonce),
-        &session_id,
-        &recovered,
-    )
-    .map_err(|e| e.to_string())?;
+    let decoded = decrypt_payload(&keys, &Nonce::from_bytes(nonce), &session_id, &recovered)
+        .map_err(|e| e.to_string())?;
 
     Ok(JobResult {
         payload_size: params.payload_size,
