@@ -35,6 +35,7 @@ tool you can test end to end but not yet run across a real air gap.
 - [Resuming an Interrupted Receive](docs/RESUME.md)
 - [Verifying a Received Dataset](docs/VERIFY.md)
 - [Threat Model](docs/THREAT-MODEL.md)
+- [Fuzzing](docs/FUZZING.md) — the toolchain decision, the targets, the corpus
 - [Phase Log](docs/phase-log.md)
 
 Wire formats live in [proto/](proto/).

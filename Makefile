@@ -1,6 +1,6 @@
 # Dhow Makefile - convenience targets
 
-.PHONY: build test lint gate clean audit deny govulncheck fmt clippy spec-check vectors
+.PHONY: build test lint gate clean audit deny govulncheck fmt clippy spec-check vectors fuzz
 
 build:
 	cd core && cargo build
@@ -40,3 +40,6 @@ spec-check:
 
 vectors:
 	python3 scripts/gen_vectors.py
+
+fuzz:
+	scripts/fuzz.sh 60
