@@ -525,7 +525,12 @@ func runRecv(env Env, args []string) error {
 	stopAfter := fs.Uint("stop-after", 0, "stop after accepting this many frames, or 0 for no limit")
 	keepState := fs.Bool("keep-state", false, "keep the resume state after the transfer completes")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	resolve := verbosityFlags(fs)
 	if err := fs.Parse(args); err != nil {
+		return &exitError{code: ExitUsage, err: err}
+	}
+	level, err := resolve()
+	if err != nil {
 		return &exitError{code: ExitUsage, err: err}
 	}
 	if *saveEvery == 0 {
@@ -565,7 +570,7 @@ func runRecv(env Env, args []string) error {
 
 	// Restore whatever a previous run got through, if the operator asked for
 	// resumable progress and there is any.
-	store, resumed, err := restoreProgress(env, *stateDir, sessionID, dec)
+	store, resumed, err := restoreProgress(env, level, *stateDir, sessionID, dec)
 	if err != nil {
 		return err
 	}
@@ -579,7 +584,11 @@ func runRecv(env Env, args []string) error {
 	defer stop()
 
 	accepted, rejected := 0, 0
+	blocksDone := -1
 	stopped := false
+
+	level.say(env.Stderr, loud, "decoding %d blocks from %d captured frames\n",
+		params.BlockCount, len(names))
 
 	for _, name := range names {
 		if ctx.Err() != nil {
@@ -602,6 +611,22 @@ func runRecv(env Env, args []string) error {
 			continue
 		}
 		accepted++
+
+		// Progress is reported by block rather than by frame. Frames arrive in
+		// their thousands and most of them change nothing an operator can act
+		// on; a block completing is the unit of real progress, and it is what
+		// tells them whether pointing the camera differently is helping.
+		if level >= loud {
+			done, err := dec.BlocksComplete()
+			if err != nil {
+				return failf(ExitInternal, "reading progress: %w", err)
+			}
+			if done != blocksDone {
+				blocksDone = done
+				level.say(env.Stderr, loud, "%d of %d blocks decoded (%d frames accepted, %d rejected)\n",
+					done, params.BlockCount, resumed+accepted, rejected)
+			}
+		}
 
 		// Journal first, then the index. The other order would produce an
 		// index describing a frame the journal does not hold, which is the one
@@ -664,6 +689,10 @@ func runRecv(env Env, args []string) error {
 		}
 	}
 
+	if level == quiet && !*asJSON {
+		return nil
+	}
+
 	human := fmt.Sprintf("session   %s\naccepted  %d frames\nrejected  %d frames\nfiles     %d\nwritten   %s\n",
 		record.SessionID, accepted, rejected, len(entries), *outDir)
 	if resumed > 0 {
@@ -697,7 +726,7 @@ func runRecv(env Env, args []string) error {
 // Every failure here is fail-closed. A state that cannot be trusted is never
 // partially applied, because a decoder holding some of a previous run's frames
 // and no record of which ones is worse than one holding none.
-func restoreProgress(env Env, dir string, sessionID [16]byte, dec *ffi.Decoder) (*resume.Store, int, error) {
+func restoreProgress(env Env, level verbosity, dir string, sessionID [16]byte, dec *ffi.Decoder) (*resume.Store, int, error) {
 	if dir == "" {
 		return nil, 0, nil
 	}
@@ -751,7 +780,9 @@ func restoreProgress(env Env, dir string, sessionID [16]byte, dec *ffi.Decoder) 
 		return nil, 0, failf(ExitInput, "preparing the journal: %w", err)
 	}
 
-	_, _ = fmt.Fprintf(env.Stderr, "resumed %d frames from %s\n", replayed, dir)
+	// Reported at normal level, not verbose: an operator who does not realise
+	// a run resumed will misread every count that follows it.
+	level.say(env.Stderr, normal, "resumed %d frames from %s\n", replayed, dir)
 	return store, replayed, nil
 }
 
