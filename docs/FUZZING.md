@@ -128,10 +128,28 @@ not crash:
 cd fuzz && cargo +nightly-2025-12-14 fuzz run <target> artifacts/<target>/<file>
 ```
 
-Then: add the input to `fuzz/corpus/<target>/`, write a unit test in the crate
-that owns the parser reproducing it, fix it, and commit the test in the same
-change as the fix. A crash found by fuzzing and fixed without a regression test
-is a crash that will come back.
+Then: copy the input to `fuzz/regressions/<target>/`, fix the parser, and commit
+both in the same change. A crash found by fuzzing and fixed without a regression
+input is a crash that will come back.
+
+`fuzz/regressions/` is committed, unlike `fuzz/corpus/`. It is replayed two
+ways:
+
+- `scripts/fuzz.sh` copies it into the corpus before every run, because an input
+  that once broke a parser is the most interesting starting point there is.
+- `dhow-codec`'s `replay_test` walks it on **stable**, in the default `cargo
+  test`, asserting the same invariants the fuzz targets assert.
+
+The second is the one that matters. The fuzz gate skips on a machine without
+nightly, and that is right for a search and wrong for a regression: an input
+that once crashed a parser must be checked by everyone, on every run, with the
+toolchain everyone has. The duplication between `replay_test` and the fuzz
+targets is deliberate — the fuzz crate cannot be a dependency of `dhow-codec`,
+and a regression check that only runs where the fuzzer runs is a regression
+check that was not needed.
+
+`replay_test` fails if a regression directory is empty or missing, rather than
+iterating over nothing and reporting success.
 
 ## What the gate runs, and what it does not
 

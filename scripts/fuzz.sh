@@ -79,6 +79,16 @@ echo
 
 echo "seeding corpora from proto/vectors.json"
 python3 "$ROOT/scripts/seed_corpus.py"
+
+# The committed regression inputs go into the corpus too. An input that once
+# broke a parser is the most interesting starting point there is, and leaving it
+# out would mean the fuzzer relearns the neighbourhood from scratch every run.
+for target in "${TARGETS[@]}"; do
+    if [ -d "$ROOT/fuzz/regressions/$target" ]; then
+        mkdir -p "$ROOT/fuzz/corpus/$target"
+        cp "$ROOT/fuzz/regressions/$target"/*.bin "$ROOT/fuzz/corpus/$target/" 2>/dev/null || true
+    fi
+done
 echo
 
 FAILED=0
