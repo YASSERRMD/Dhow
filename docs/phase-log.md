@@ -1,5 +1,53 @@
 # Phase Log
 
+## Phase 22 - Screen renderer
+
+**Objective:** A display loop that shows a frame stream at a configurable
+rate, opens with a calibration pattern and an on-screen session fingerprint,
+and ends cleanly when the operator stops it.
+
+**Gates:** renders on a headless surface; frame pacing measured within
+tolerance; calibration output deterministic for a session and distinct between
+sessions.
+
+### Design notes
+
+The sender has no back channel. It cannot know which frames the camera caught,
+so it loops the whole stream until stopped, and every pass is identical, which
+is what lets the receiver treat any capture of a frame as interchangeable.
+
+Pacing uses a ticker rather than sleeping the frame interval after each draw.
+Sleeping would let render time accumulate: a draw costing 5ms would make every
+subsequent frame 5ms late, and the drift would compound across a long stream.
+
+The calibration pattern is a QR code holding a fixed public string rather than
+an arbitrary image, so the operator can confirm with any phone scanner that the
+screen, distance, and lighting can read a code of this size before committing
+to a transfer. The fingerprint lets both operators establish by eye that they
+are on the same session, which no protocol can do for them across an air gap.
+
+The command writes its summary to stderr so stdout carries only what a camera
+should see.
+
+### Verified by hand
+
+```
+$ dhow display -in frames -fps 40 -loops 1 -calibration 1 -no-clear -qr-version 20
+CALIBRATION  session AFA2-6DA9-574B-B483
+session AFA2-6DA9-574B-B483   frame 1/29   pass 1
+shown       29 frames over 1 passes in 1s
+```
+
+### Gate output
+
+```
+$ ./scripts/gate.sh
+  Passed: 12
+  Failed: 0
+ALL GATES PASSED
+```
+
+
 ## Phase 21 - QR frame encoding
 
 **Objective:** Pack wire frames into QR codes with configurable version and
