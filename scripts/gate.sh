@@ -85,6 +85,14 @@ run_gate "govulncheck" \
 run_gate "loopback end-to-end" \
     bash -c "'$ROOT/scripts/loopback.sh' 2 20 >/dev/null"
 
+# --- Operations guide ---
+#
+# Follows docs/OPERATIONS.md from a cold start, so the guide fails the build
+# when it drifts from the tool rather than when an operator discovers it.
+
+run_gate "operations guide drill" \
+    bash -c "'$ROOT/scripts/drill.sh' >/dev/null"
+
 # --- Summary ---
 
 echo ""
