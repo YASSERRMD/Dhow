@@ -13,6 +13,14 @@ qrcodegen = "1.8"
 raptorq = "2.0"
 
 [dev-dependencies]
+# Benchmarks for the data path. criterion because it reports confidence
+# intervals and compares against a saved baseline, which is what turns a
+# benchmark into a regression check rather than a number somebody eyeballs.
+criterion = "0.7"
 hex = "0.4"
 proptest = "1.0"
 serde_json = "1.0"
+
+[[bench]]
+name = "data_path"
+harness = false
