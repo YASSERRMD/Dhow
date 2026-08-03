@@ -1239,3 +1239,38 @@ func TestHelpDocumentsEveryExitCodeTheCodeDefines(t *testing.T) {
 		}
 	}
 }
+
+func TestKeyErrorsNameTheirFix(t *testing.T) {
+	_, frameDir, _ := sendFixture(t, "2")
+	work := t.TempDir()
+
+	missing := filepath.Join(work, "absent.key")
+	code, _, errOut := run("recv", "-key", missing, "-in", frameDir, "-out", filepath.Join(work, "a"))
+	if code != ExitInput {
+		t.Fatalf("missing key exited %d, want %d", code, ExitInput)
+	}
+	// The message must contain a command the operator can run, not only a
+	// description of what went wrong.
+	if !strings.Contains(errOut, "dhow keygen") {
+		t.Errorf("the missing-key error does not say how to make one: %s", errOut)
+	}
+
+	permissive := filepath.Join(work, "loose.key")
+	if code, _, errOut := run("keygen", "-out", permissive); code != ExitOK {
+		t.Fatalf("keygen exited %d: %s", code, errOut)
+	}
+	if err := os.Chmod(permissive, 0o644); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+
+	code, _, errOut = run("recv", "-key", permissive, "-in", frameDir, "-out", filepath.Join(work, "b"))
+	if code != ExitInput {
+		t.Fatalf("permissive key exited %d, want %d", code, ExitInput)
+	}
+	if !strings.Contains(errOut, "chmod 600") {
+		t.Errorf("the permissive-key error does not say how to fix it: %s", errOut)
+	}
+	if !strings.Contains(errOut, "compromised") {
+		t.Errorf("the permissive-key error does not warn that the key may have been read: %s", errOut)
+	}
+}
