@@ -30,7 +30,19 @@ round *parameters* from the seed. That gap is fixed — content is now derived
 from the seed — but the fix cannot recover the data that triggered the
 original failure.
 
-Subsequent soaks have not reproduced it.
+**Soak evidence so far, all with the seeded-data harness:**
+
+| Run | Rounds | Completed | Closed | Corrupted | Reproduced B-1 |
+|-----|-------:|----------:|-------:|----------:|----------------|
+| seeds 7919, 15838, 23757, 31676 | 4 x 60 | 132 | 108 | 0 | no |
+| seeds 101, 202, 303, 404 | 4 x 150 | 381 | 219 | 0 | no |
+
+960 rounds, none of which failed and none of which reported corruption.
+
+That is not grounds for closing this. The original failure was seen once in
+120 rounds with data the harness could not replay, so the population being
+sampled now is not provably the same one. Absence here bounds how common it
+is, not whether it exists.
 
 What is known:
 
