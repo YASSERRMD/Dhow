@@ -1,5 +1,23 @@
 # Phase Log
 
+## Phase 26 - Operator UX and the operations guide
+
+**Objective:** Make the tool usable by someone who did not build it. A
+coherent `-quiet` and `-verbose` across every command, live progress while a
+receive runs, error messages that name a next step rather than only a cause,
+an exit-code contract that is tested rather than merely documented, and
+`docs/OPERATIONS.md` covering physical setup, throughput, troubleshooting, and
+the key ceremony.
+
+The operations guide must cover how block count interacts with the loss
+pattern a physical setup produces. Phase 23 found that interleaving moves the
+pathological case rather than removing it, and that is an operator-facing
+consequence, not an implementation detail.
+
+**Gates:** every documented exit code is produced by a test that provokes it;
+`-quiet` and `-verbose` change what is printed without changing exit codes or
+JSON; a cold-start drill following only the guide completes a transfer.
+
 ## Phase 25 - Verification that checks contents
 
 **Objective:** `dhow verify` currently counts files. A dataset with the right
