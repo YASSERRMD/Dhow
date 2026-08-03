@@ -1,5 +1,19 @@
 # Phase Log
 
+## Phase 24 - Interruption and resume, full stack
+
+**Objective:** A receiver that survives being killed. Progress is persisted to
+disk as it is earned, a restart picks the transfer up where it stopped rather
+than from zero, and a resume state that has been tampered with or that belongs
+to another session is rejected rather than trusted. The persistence path runs
+the whole stack: the codec records which symbols each block holds, the resume
+wire format carries that record with its own integrity protection, the FFI
+exposes save and verify, and the CLI drives both.
+
+**Gates:** a receiver killed partway through a transfer restarts and completes;
+every tampering class against the resume state is rejected with a distinct
+error; the Rust CI gates actually execute for the first time.
+
 ## Phase 23 - Loopback integration
 
 **Objective:** An unattended end-to-end harness that runs a real transfer
