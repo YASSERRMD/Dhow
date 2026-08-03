@@ -227,17 +227,34 @@ type sendResult struct {
 // no secret: the salt and nonce are public by design, and the payload is
 // unreadable without the operator key.
 type transferRecord struct {
-	Version               int    `json:"version"`
-	SessionID             string `json:"session_id"`
-	Salt                  string `json:"salt"`
-	Nonce                 string `json:"nonce"`
-	PayloadSize           uint64 `json:"payload_size"`
-	BlockCount            uint32 `json:"block_count"`
-	SymbolSize            uint32 `json:"symbol_size"`
-	SourceSymbolsPerBlock uint32 `json:"source_symbols_per_block"`
-	TotalSymbolsPerBlock  uint32 `json:"total_symbols_per_block"`
-	PayloadDigest         string `json:"payload_digest"`
-	Files                 int    `json:"files"`
+	Version               int          `json:"version"`
+	SessionID             string       `json:"session_id"`
+	Salt                  string       `json:"salt"`
+	Nonce                 string       `json:"nonce"`
+	PayloadSize           uint64       `json:"payload_size"`
+	BlockCount            uint32       `json:"block_count"`
+	SymbolSize            uint32       `json:"symbol_size"`
+	SourceSymbolsPerBlock uint32       `json:"source_symbols_per_block"`
+	TotalSymbolsPerBlock  uint32       `json:"total_symbols_per_block"`
+	PayloadDigest         string       `json:"payload_digest"`
+	Files                 []fileRecord `json:"files"`
+}
+
+// fileRecord is one file's entry in the transfer record's inventory.
+//
+// The inventory is what makes `dhow verify` mean something. Without it the
+// command can only count files, so a dataset of the right shape and entirely
+// wrong contents passes. With it, verify can be run months later against a
+// dataset sitting on disk and say exactly which file changed.
+type fileRecord struct {
+	// Name is the file's path within the dataset, slash-separated.
+	Name string `json:"name"`
+	// Size is its length in bytes.
+	Size int64 `json:"size"`
+	// Executable records whether the owner execute bit was set.
+	Executable bool `json:"executable"`
+	// Digest is the BLAKE3 digest of the contents, hex-encoded.
+	Digest string `json:"digest"`
 }
 
 const recordName = "transfer.json"
@@ -331,8 +348,18 @@ func runSend(env Env, args []string) error {
 		}
 	}
 
+	inventory := make([]fileRecord, 0, len(entries))
+	for _, e := range entries {
+		inventory = append(inventory, fileRecord{
+			Name:       e.Name,
+			Size:       e.Size,
+			Executable: e.Executable,
+			Digest:     hex.EncodeToString(e.Digest[:]),
+		})
+	}
+
 	record := transferRecord{
-		Version:               1,
+		Version:               2,
 		SessionID:             hex.EncodeToString(sessionID[:]),
 		Salt:                  hex.EncodeToString(salt[:]),
 		Nonce:                 hex.EncodeToString(nonce[:]),
@@ -342,7 +369,7 @@ func runSend(env Env, args []string) error {
 		SourceSymbolsPerBlock: resolved.SourceSymbolsPerBlock,
 		TotalSymbolsPerBlock:  resolved.TotalSymbolsPerBlock,
 		PayloadDigest:         hex.EncodeToString(resolved.PayloadDigest[:]),
-		Files:                 len(entries),
+		Files:                 inventory,
 	}
 	recordBytes, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
@@ -666,11 +693,35 @@ func saveProgress(store *resume.Store, dec *ffi.Decoder) error {
 
 // --- verify ---
 
+// Problem is one discrepancy between a dataset and what was sent.
+type Problem struct {
+	// File is the dataset-relative name the problem concerns, empty when the
+	// problem is about the dataset as a whole.
+	File string `json:"file,omitempty"`
+	// Kind classifies the problem, so a script can branch without parsing
+	// English.
+	Kind string `json:"kind"`
+	// Detail describes it for a person.
+	Detail string `json:"detail"`
+}
+
+// Problem kinds. These are part of the JSON interface and are stable.
+const (
+	ProblemUnreadable = "unreadable"
+	ProblemMissing    = "missing"
+	ProblemUnexpected = "unexpected"
+	ProblemSize       = "size"
+	ProblemContent    = "content"
+	ProblemMode       = "mode"
+)
+
 type verifyResult struct {
-	OK        bool     `json:"ok"`
-	SessionID string   `json:"session_id"`
-	Files     int      `json:"files"`
-	Problems  []string `json:"problems"`
+	OK        bool      `json:"ok"`
+	SessionID string    `json:"session_id"`
+	Files     int       `json:"files"`
+	Checked   int       `json:"files_checked"`
+	Bytes     int64     `json:"bytes_checked"`
+	Problems  []Problem `json:"problems"`
 }
 
 func runVerify(env Env, args []string) error {
@@ -687,53 +738,217 @@ func runVerify(env Env, args []string) error {
 		return err
 	}
 
-	var problems []string
-
-	info, err := os.Stat(*dir)
-	switch {
-	case err != nil:
-		problems = append(problems, fmt.Sprintf("cannot read %s: %v", *dir, err))
-	case !info.IsDir():
-		problems = append(problems, fmt.Sprintf("%s is not a directory", *dir))
-	default:
-		count := 0
-		err := filepath.Walk(*dir, func(_ string, fi os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-			if fi.Mode().IsRegular() {
-				count++
-			}
-			return nil
-		})
-		if err != nil {
-			problems = append(problems, fmt.Sprintf("walking %s: %v", *dir, err))
-		} else if count != record.Files {
-			problems = append(problems,
-				fmt.Sprintf("expected %d files, found %d", record.Files, count))
-		}
-	}
-
+	problems, checked, bytes := inspectDataset(*dir, record.Files)
 	ok := len(problems) == 0
-	human := fmt.Sprintf("session   %s\nfiles     %d\nresult    OK\n", record.SessionID, record.Files)
-	if !ok {
-		var b strings.Builder
-		fmt.Fprintf(&b, "session   %s\nresult    FAILED\n", record.SessionID)
+
+	var b strings.Builder
+	if ok {
+		fmt.Fprintf(&b, "session   %s\nfiles     %d\nbytes     %d\nresult    OK\n",
+			record.SessionID, checked, bytes)
+	} else {
+		fmt.Fprintf(&b, "session   %s\nfiles     %d checked of %d\nresult    FAILED\n",
+			record.SessionID, checked, len(record.Files))
 		for _, p := range problems {
-			fmt.Fprintf(&b, "  - %s\n", p)
+			if p.File == "" {
+				fmt.Fprintf(&b, "  - %s\n", p.Detail)
+				continue
+			}
+			fmt.Fprintf(&b, "  - %s: %s\n", p.File, p.Detail)
 		}
-		human = b.String()
 	}
 
 	if err := emit(env.Stdout, *asJSON,
-		verifyResult{OK: ok, SessionID: record.SessionID, Files: record.Files, Problems: problems},
-		human); err != nil {
+		verifyResult{
+			OK:        ok,
+			SessionID: record.SessionID,
+			Files:     len(record.Files),
+			Checked:   checked,
+			Bytes:     bytes,
+			Problems:  problems,
+		},
+		b.String()); err != nil {
 		return err
 	}
 	if !ok {
 		return &exitError{code: ExitVerifyFailed, err: errors.New("verification failed")}
 	}
 	return nil
+}
+
+// inspectDataset compares a directory against the inventory that was sent.
+//
+// Returns every discrepancy, the number of files it managed to check, and the
+// number of bytes it read. It does not stop at the first problem: an operator
+// looking at a dataset that came back wrong needs the whole picture, not the
+// alphabetically first part of it.
+func inspectDataset(dir string, want []fileRecord) (problems []Problem, checked int, bytesRead int64) {
+	info, err := os.Stat(dir)
+	switch {
+	case err != nil:
+		return []Problem{{Kind: ProblemUnreadable, Detail: fmt.Sprintf("cannot read %s: %v", dir, err)}}, 0, 0
+	case !info.IsDir():
+		return []Problem{{Kind: ProblemUnreadable, Detail: fmt.Sprintf("%s is not a directory", dir)}}, 0, 0
+	}
+
+	found, err := walkDataset(dir)
+	if err != nil {
+		return []Problem{{Kind: ProblemUnreadable, Detail: fmt.Sprintf("walking %s: %v", dir, err)}}, 0, 0
+	}
+
+	expected := make(map[string]struct{}, len(want))
+
+	for _, entry := range want {
+		expected[entry.Name] = struct{}{}
+
+		fi, present := found[entry.Name]
+		if !present {
+			problems = append(problems, Problem{
+				File:   entry.Name,
+				Kind:   ProblemMissing,
+				Detail: "missing from the dataset",
+			})
+			continue
+		}
+
+		// Size is checked before the contents so a truncated file is reported
+		// as truncated rather than as a digest mismatch, which says nothing
+		// about what went wrong.
+		if fi.Size() != entry.Size {
+			problems = append(problems, Problem{
+				File:   entry.Name,
+				Kind:   ProblemSize,
+				Detail: fmt.Sprintf("is %d bytes, expected %d", fi.Size(), entry.Size),
+			})
+			continue
+		}
+
+		if executable(fi) != entry.Executable {
+			problems = append(problems, Problem{
+				File:   entry.Name,
+				Kind:   ProblemMode,
+				Detail: modeDetail(entry.Executable),
+			})
+			// Not a `continue`: the mode is wrong but the contents may still
+			// be worth checking, and reporting one problem per file would hide
+			// the more serious of the two.
+		}
+
+		digest, err := digestFile(filepath.Join(dir, filepath.FromSlash(entry.Name)))
+		if err != nil {
+			problems = append(problems, Problem{
+				File:   entry.Name,
+				Kind:   ProblemUnreadable,
+				Detail: err.Error(),
+			})
+			continue
+		}
+		checked++
+		bytesRead += entry.Size
+
+		if digest != entry.Digest {
+			problems = append(problems, Problem{
+				File: entry.Name,
+				Kind: ProblemContent,
+				Detail: fmt.Sprintf("contents differ: digest %s, expected %s",
+					shortDigest(digest), shortDigest(entry.Digest)),
+			})
+		}
+	}
+
+	// A file nobody sent is as much a problem as one that went missing: it
+	// means the directory is not the dataset that was transferred.
+	extra := make([]string, 0)
+	for name := range found {
+		if _, ok := expected[name]; !ok {
+			extra = append(extra, name)
+		}
+	}
+	sort.Strings(extra)
+	for _, name := range extra {
+		problems = append(problems, Problem{
+			File:   name,
+			Kind:   ProblemUnexpected,
+			Detail: "is not part of the transfer",
+		})
+	}
+
+	return problems, checked, bytesRead
+}
+
+// walkDataset indexes the regular files under dir by dataset-relative name.
+func walkDataset(dir string) (map[string]os.FileInfo, error) {
+	found := make(map[string]os.FileInfo)
+	err := filepath.Walk(dir, func(path string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !fi.Mode().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		found[filepath.ToSlash(rel)] = fi
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return found, nil
+}
+
+// digestFile returns the hex BLAKE3 digest of a file's contents.
+//
+// Streamed rather than read whole: verify runs against datasets that were
+// worth moving across an air gap, and a file too big to fit in memory is not
+// an unreasonable thing to find in one.
+func digestFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("cannot read: %w", err)
+	}
+	// Read-only: a failing Close reports nothing the read did not already.
+	defer func() { _ = f.Close() }()
+
+	hasher, err := ffi.NewHasher()
+	if err != nil {
+		return "", fmt.Errorf("preparing a digest: %w", err)
+	}
+	defer hasher.Close()
+
+	if _, err := io.Copy(hasher, f); err != nil {
+		return "", fmt.Errorf("cannot read: %w", err)
+	}
+	sum, err := hasher.Sum()
+	if err != nil {
+		return "", fmt.Errorf("computing the digest: %w", err)
+	}
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// executable reports whether the owner execute bit is set.
+func executable(fi os.FileInfo) bool {
+	return fi.Mode().Perm()&0o100 != 0
+}
+
+func modeDetail(wantExecutable bool) string {
+	if wantExecutable {
+		return "is not executable but was sent executable"
+	}
+	return "is executable but was not sent executable"
+}
+
+// shortDigest trims a digest for display.
+//
+// The full 64 hex characters twice on one line pushes the part that differs
+// off the edge of a terminal, which is the opposite of helpful. The first
+// eight are enough to tell two apart.
+func shortDigest(d string) string {
+	if len(d) <= 8 {
+		return d
+	}
+	return d[:8]
 }
 
 // --- version ---
@@ -765,8 +980,10 @@ func readRecord(path string) (*transferRecord, error) {
 	if err := json.Unmarshal(data, &r); err != nil {
 		return nil, failf(ExitInput, "parsing %s: %w", path, err)
 	}
-	if r.Version != 1 {
-		return nil, failf(ExitInput, "%s has unsupported version %d", path, r.Version)
+	if r.Version != 2 {
+		return nil, failf(ExitInput,
+			"%s has unsupported version %d; this build writes and reads version 2",
+			path, r.Version)
 	}
 	return &r, nil
 }
