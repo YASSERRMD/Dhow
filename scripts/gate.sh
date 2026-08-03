@@ -17,6 +17,8 @@ export PATH="$HOME/go/bin:$PATH"
 
 PASS=0
 FAIL=0
+SKIP=0
+SKIPPED_NAMES=()
 
 run_gate() {
     local name="$1"
@@ -29,6 +31,20 @@ run_gate() {
         echo "  FAIL"
         FAIL=$((FAIL + 1))
     fi
+}
+
+# skip_gate records a gate that could not run, loudly and by name.
+#
+# A gate that silently reports PASS when its tooling is missing is worse than
+# no gate: it is a green summary that means nothing, and this repository has
+# already shipped one of those. A skip is counted separately, listed in the
+# summary, and never folded into the pass count.
+skip_gate() {
+    local name="$1" reason="$2"
+    echo "=== GATE: $name ==="
+    echo "  SKIP: $reason"
+    SKIP=$((SKIP + 1))
+    SKIPPED_NAMES+=("$name")
 }
 
 # --- Rust gates ---
@@ -120,16 +136,47 @@ run_gate "operations guide drill" \
 run_gate "chaos soak (12 rounds)" \
     bash -c "'$ROOT/scripts/chaos.sh' 12 20260803 >/dev/null"
 
+# --- Fuzzing ---
+#
+# Seconds per target, not minutes: a gate that takes an hour is a gate people
+# skip. Its job is to prove the targets still build and still run against the
+# current wire formats, not to search. Searching is scripts/fuzz.sh 3600.
+#
+# The fuzz toolchain is a second pinned nightly and is not required to build or
+# test dhow, so a machine without it skips this rather than failing - but the
+# skip is counted and named, never reported as a pass.
+
+FUZZ_TOOLCHAIN="nightly-2025-12-14"
+if ! command -v cargo-fuzz >/dev/null 2>&1; then
+    skip_gate "fuzz targets (10s each)" \
+        "cargo-fuzz is not installed; see docs/FUZZING.md"
+elif ! rustup toolchain list 2>/dev/null | grep -q "^${FUZZ_TOOLCHAIN}"; then
+    skip_gate "fuzz targets (10s each)" \
+        "the ${FUZZ_TOOLCHAIN} toolchain is not installed; see docs/FUZZING.md"
+else
+    run_gate "fuzz targets (10s each)" \
+        bash -c "'$ROOT/scripts/fuzz.sh' 10 >/dev/null"
+fi
+
 # --- Summary ---
 
 echo ""
 echo "=== GATE SUMMARY ==="
-echo "  Passed: $PASS"
-echo "  Failed: $FAIL"
+echo "  Passed:  $PASS"
+echo "  Failed:  $FAIL"
+echo "  Skipped: $SKIP"
+for name in ${SKIPPED_NAMES+"${SKIPPED_NAMES[@]}"}; do
+    echo "    - $name"
+done
 
 if [ "$FAIL" -gt 0 ]; then
     echo "GATES FAILED"
     exit 1
+fi
+
+if [ "$SKIP" -gt 0 ]; then
+    echo "ALL GATES PASSED (${SKIP} skipped)"
+    exit 0
 fi
 
 echo "ALL GATES PASSED"
