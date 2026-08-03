@@ -673,6 +673,114 @@ func (d *Decoder) Close() {
 	d.ptr = nil
 }
 
+// Blake3 returns the BLAKE3 digest of data.
+//
+// Computed by the Rust core rather than in Go, so the digest that decides
+// whether a dataset verified has exactly one implementation: the same one the
+// transfer itself used.
+func Blake3(data []byte) ([32]byte, error) {
+	var out [32]byte
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	// The core treats a null pointer as a missing argument rather than an
+	// empty slice, so an empty input still needs somewhere to point.
+	ptr := (*C.uint8_t)(nil)
+	if len(data) > 0 {
+		ptr = (*C.uint8_t)(unsafe.Pointer(&data[0]))
+	} else {
+		var empty [1]byte
+		ptr = (*C.uint8_t)(unsafe.Pointer(&empty[0]))
+	}
+
+	st := Status(C.dhow_blake3(ptr, C.size_t(len(data)), (*C.uint8_t)(unsafe.Pointer(&out[0]))))
+	runtime.KeepAlive(data)
+	if st != StatusOK {
+		return [32]byte{}, wrap(st)
+	}
+	return out, nil
+}
+
+// Hasher is a streaming BLAKE3 hasher.
+//
+// It implements io.Writer, so it composes with io.Copy and io.MultiWriter and
+// a caller hashing a file it is already streaming somewhere else never has to
+// hold the file in memory.
+//
+// Close it when finished, like any other handle here.
+type Hasher struct {
+	ptr *C.DhowHasher
+}
+
+// NewHasher creates a streaming BLAKE3 hasher.
+func NewHasher() (*Hasher, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ptr := C.dhow_hasher_new()
+	if ptr == nil {
+		return nil, &Error{Status: StatusInternal, Detail: lastError()}
+	}
+	return &Hasher{ptr: ptr}, nil
+}
+
+// Write adds bytes to the digest. It never returns a short write without an
+// error, so it satisfies io.Writer.
+func (h *Hasher) Write(p []byte) (int, error) {
+	if h == nil || h.ptr == nil {
+		return 0, errors.New("dhow: hasher is closed")
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	st := Status(C.dhow_hasher_update(
+		h.ptr,
+		(*C.uint8_t)(unsafe.Pointer(&p[0])),
+		C.size_t(len(p)),
+	))
+	runtime.KeepAlive(p)
+	if st != StatusOK {
+		return 0, wrap(st)
+	}
+	return len(p), nil
+}
+
+// Sum returns the digest of everything written so far.
+//
+// The hasher stays usable afterwards, so a caller may keep writing.
+func (h *Hasher) Sum() ([32]byte, error) {
+	var out [32]byte
+	if h == nil || h.ptr == nil {
+		return out, errors.New("dhow: hasher is closed")
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	st := Status(C.dhow_hasher_finish(h.ptr, (*C.uint8_t)(unsafe.Pointer(&out[0]))))
+	if st != StatusOK {
+		return [32]byte{}, wrap(st)
+	}
+	return out, nil
+}
+
+// Close releases the hasher.
+//
+// Safe to call more than once and on a nil receiver. Returns nothing for the
+// same reason as [Key.Close].
+func (h *Hasher) Close() {
+	if h == nil || h.ptr == nil {
+		return
+	}
+	C.dhow_hasher_free(h.ptr)
+	h.ptr = nil
+}
+
 // QRCode is one frame rendered as a QR module grid.
 //
 // Modules is one byte per module, row-major, 1 for dark, so the grid is

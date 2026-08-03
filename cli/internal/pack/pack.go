@@ -30,6 +30,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"dhow/cli/internal/ffi"
 )
 
 // Magic identifies a Dhow archive.
@@ -70,6 +72,15 @@ type Entry struct {
 	Executable bool
 	// Size is the file's length in bytes.
 	Size int64
+	// Digest is the BLAKE3 digest of the file's contents.
+	//
+	// Filled by Create and left zero by Extract. The archive format does not
+	// carry it: the whole payload is already covered by the digest the sender
+	// signs, so a per-entry digest inside the archive would protect nothing
+	// that is not protected. What it is for is the inventory the transfer
+	// record publishes, which lets `dhow verify` check an extracted dataset
+	// long after the transfer, against corruption that happened on disk.
+	Digest [32]byte
 }
 
 // ValidateName rejects a name that could escape the extraction directory.
@@ -121,10 +132,12 @@ func Create(w io.Writer, root string) ([]Entry, error) {
 		return nil, fmt.Errorf("writing archive header: %w", err)
 	}
 
-	for _, e := range entries {
-		if err := writeEntry(w, root, e); err != nil {
+	for i := range entries {
+		digest, err := writeEntry(w, root, entries[i])
+		if err != nil {
 			return nil, err
 		}
+		entries[i].Digest = digest
 	}
 	return entries, nil
 }
@@ -192,7 +205,14 @@ func collect(root string) ([]Entry, error) {
 }
 
 // writeEntry appends one entry's header and contents.
-func writeEntry(w io.Writer, root string, e Entry) error {
+// writeEntry writes one entry and returns the digest of its contents.
+//
+// The digest is taken from the same read that feeds the archive, so it
+// describes the bytes that were actually packed. Reading the file a second
+// time to hash it would leave a window in which the two could differ.
+func writeEntry(w io.Writer, root string, e Entry) ([32]byte, error) {
+	var zero [32]byte
+
 	var flags uint8
 	if e.Executable {
 		flags = 1
@@ -204,26 +224,39 @@ func writeEntry(w io.Writer, root string, e Entry) error {
 	head = append(head, flags)
 	head = binary.LittleEndian.AppendUint64(head, uint64(e.Size))
 	if _, err := w.Write(head); err != nil {
-		return fmt.Errorf("writing entry header for %s: %w", e.Name, err)
+		return zero, fmt.Errorf("writing entry header for %s: %w", e.Name, err)
 	}
 
 	f, err := os.Open(filepath.Join(root, filepath.FromSlash(e.Name)))
 	if err != nil {
-		return fmt.Errorf("opening %s: %w", e.Name, err)
+		return zero, fmt.Errorf("opening %s: %w", e.Name, err)
 	}
 	// Read-only: a failing Close reports nothing the read did not already.
 	defer func() { _ = f.Close() }()
 
-	n, err := io.Copy(w, f)
+	// The digest is taken from the same stream that feeds the archive, so no
+	// part of the file is ever held in memory on its account.
+	hasher, err := ffi.NewHasher()
 	if err != nil {
-		return fmt.Errorf("reading %s: %w", e.Name, err)
+		return zero, fmt.Errorf("preparing a digest for %s: %w", e.Name, err)
+	}
+	defer hasher.Close()
+
+	n, err := io.Copy(io.MultiWriter(w, hasher), f)
+	if err != nil {
+		return zero, fmt.Errorf("reading %s: %w", e.Name, err)
 	}
 	// A file that changed size between the walk and the read would desynchronise
 	// every following entry, so it is an error rather than something to absorb.
 	if n != e.Size {
-		return fmt.Errorf("%s changed size during packing: expected %d, read %d", e.Name, e.Size, n)
+		return zero, fmt.Errorf("%s changed size during packing: expected %d, read %d", e.Name, e.Size, n)
 	}
-	return nil
+
+	digest, err := hasher.Sum()
+	if err != nil {
+		return zero, fmt.Errorf("digesting %s: %w", e.Name, err)
+	}
+	return digest, nil
 }
 
 // Extract reads an archive from data and writes its files under dest.

@@ -247,12 +247,26 @@ pass "wrong key fails closed and writes nothing"
 "$DHOW" verify -in "$WORK/frames" -dir "$WORK/clean" >/dev/null || fail "verify rejected a good dataset"
 pass "verify accepts a good dataset"
 
+# One flipped byte in a multi-megabyte file, with every name, count, and size
+# left correct. This is the corruption a file count cannot see.
+printf '\xff' | dd of="$WORK/clean/bin/random.bin" bs=1 seek=4096 conv=notrunc status=none
+set +e
+"$DHOW" verify -in "$WORK/frames" -dir "$WORK/clean" -json > "$WORK/verify.json" 2>/dev/null
+VERIFY_EXIT=$?
+set -e
+[ "$VERIFY_EXIT" -eq 3 ] || fail "verify of a corrupted file exited ${VERIFY_EXIT}, expected 3"
+grep -q '"kind": "content"' "$WORK/verify.json" \
+    || fail "verify did not report a content problem for a flipped byte"
+pass "verify catches a single flipped byte in a good-looking dataset"
+
 rm -f "$WORK/clean/docs/empty.txt"
 set +e
-"$DHOW" verify -in "$WORK/frames" -dir "$WORK/clean" >/dev/null 2>&1
+"$DHOW" verify -in "$WORK/frames" -dir "$WORK/clean" -json > "$WORK/verify2.json" 2>/dev/null
 VERIFY_EXIT=$?
 set -e
 [ "$VERIFY_EXIT" -eq 3 ] || fail "verify of a damaged dataset exited ${VERIFY_EXIT}, expected 3"
+grep -q '"kind": "missing"' "$WORK/verify2.json" \
+    || fail "verify did not report the removed file as missing"
 pass "verify rejects a damaged dataset"
 
 # --- Determinism ---

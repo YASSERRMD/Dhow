@@ -2,6 +2,17 @@
 
 > Version 1.1
 
+## Transfer record v2 - 2026-08-03
+
+The transfer record is not part of `proto/`: it is a stand-in the CLI writes
+alongside the frames until the signed manifest travels in the frame stream. It
+is noted here so the two are not confused.
+
+Version 2 adds a per-file inventory - name, size, executable bit, and content
+digest - which is what `dhow verify` checks an extracted dataset against. A
+version 1 record is rejected: it carries no inventory, so verifying against it
+would be the file count the inventory exists to replace.
+
 ## v1.1 - 2026-08-03
 
 ### Changed

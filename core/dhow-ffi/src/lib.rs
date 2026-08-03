@@ -46,7 +46,7 @@ use std::os::raw::c_char;
 /// Bumped whenever the C surface changes in a way that is not backwards
 /// compatible. A caller that links against a mismatched version should refuse
 /// to run rather than guess.
-pub const DHOW_ABI_VERSION: u32 = 2;
+pub const DHOW_ABI_VERSION: u32 = 3;
 
 /// Returns the ABI version this library was built with.
 #[unsafe(no_mangle)]

@@ -31,7 +31,7 @@
  * compatible. A caller that links against a mismatched version should refuse
  * to run rather than guess.
  */
-#define DHOW_ABI_VERSION 2
+#define DHOW_ABI_VERSION 3
 
 /**
  * Status returned by every `dhow_*` entry point.
@@ -108,6 +108,11 @@ typedef struct DhowDecoder DhowDecoder;
  * An opaque frame encoder.
  */
 typedef struct DhowEncoder DhowEncoder;
+
+/**
+ * An opaque streaming BLAKE3 hasher.
+ */
+typedef struct DhowHasher DhowHasher;
 
 /**
  * An opaque operator key.
@@ -441,6 +446,69 @@ DhowStatus dhow_decoder_resume_verify(const DhowDecoder *decoder,
  * freed.
  */
 void dhow_decoder_free(DhowDecoder *decoder);
+
+/**
+ * Computes the BLAKE3 digest of a byte range.
+ *
+ * Exposed so a caller does not need its own BLAKE3. The digests that decide
+ * whether a transfer verified are computed by this library; a second
+ * implementation on the calling side would be a second thing to be wrong, and
+ * the two would disagree silently rather than loudly.
+ *
+ * `data` must be non-null even for a zero-length input, matching every other
+ * buffer argument in this API; a caller hashing nothing passes any valid
+ * pointer with a length of zero.
+ *
+ * # Safety
+ *
+ * `data` must point to `len` readable bytes, and `out` must point to 32
+ * writable bytes.
+ */
+DhowStatus dhow_blake3(const uint8_t *data, uintptr_t len, uint8_t *out);
+
+/**
+ * Creates a streaming BLAKE3 hasher.
+ *
+ * The one-shot [`dhow_blake3`] needs the whole input in memory at once. A
+ * caller hashing a file it is streaming somewhere else - which is what
+ * packing a dataset does - would otherwise have to buffer the file only to
+ * hash it, turning a bounded working set into one that grows with the largest
+ * file in the dataset.
+ *
+ * Returns null on failure.
+ */
+DhowHasher *dhow_hasher_new(void);
+
+/**
+ * Adds bytes to a hasher.
+ *
+ * # Safety
+ *
+ * `hasher` must be a live handle and `data` must point to `len` readable
+ * bytes.
+ */
+DhowStatus dhow_hasher_update(DhowHasher *hasher, const uint8_t *data, uintptr_t len);
+
+/**
+ * Writes the digest of everything added so far.
+ *
+ * The hasher is left usable, so a caller may keep adding and finish again.
+ *
+ * # Safety
+ *
+ * `hasher` must be a live handle and `out` must point to 32 writable bytes.
+ */
+DhowStatus dhow_hasher_finish(const DhowHasher *hasher, uint8_t *out);
+
+/**
+ * Releases a hasher handle. Passing null is a no-op.
+ *
+ * # Safety
+ *
+ * `hasher` must be null or a handle from this library that has not been
+ * freed.
+ */
+void dhow_hasher_free(DhowHasher *hasher);
 
 /**
  * Reports how many bytes one QR code holds at `version` and `ecc`.

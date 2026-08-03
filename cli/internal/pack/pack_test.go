@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"dhow/cli/internal/ffi"
 )
 
 // writeTree creates files under a fresh directory and returns its path.
@@ -360,5 +362,98 @@ func TestEmptyDirectoryPacks(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("extracted %d entries, want 0", len(got))
+	}
+}
+
+func TestCreateRecordsEachFileContentDigest(t *testing.T) {
+	root := t.TempDir()
+	files := map[string][]byte{
+		"a.txt":       []byte("hello"),
+		"empty.txt":   {},
+		"sub/big.bin": bytes.Repeat([]byte{0xA5}, 3000),
+	}
+	for name, body := range files {
+		full := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, body, 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	var archive bytes.Buffer
+	entries, err := Create(&archive, root)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	for _, e := range entries {
+		// Checked against an independent digest of the file's real contents,
+		// not against whatever Create happened to compute.
+		want, err := ffi.Blake3(files[e.Name])
+		if err != nil {
+			t.Fatalf("Blake3: %v", err)
+		}
+		if e.Digest != want {
+			t.Errorf("%s: digest = %x, want %x", e.Name, e.Digest, want)
+		}
+	}
+
+	if len(entries) != len(files) {
+		t.Fatalf("packed %d entries, want %d", len(entries), len(files))
+	}
+}
+
+func TestCreateDigestsDifferWhenContentsDiffer(t *testing.T) {
+	// Two files of the same name and length in two datasets: only the digest
+	// can tell them apart, which is the whole point of recording it.
+	digestOf := func(body []byte) [32]byte {
+		t.Helper()
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "f.bin"), body, 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		var archive bytes.Buffer
+		entries, err := Create(&archive, root)
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		return entries[0].Digest
+	}
+
+	a := bytes.Repeat([]byte{0x01}, 4096)
+	b := bytes.Clone(a)
+	b[2048] ^= 0x01
+
+	if digestOf(a) == digestOf(b) {
+		t.Error("two files differing by one bit produced the same digest")
+	}
+	if digestOf(a) != digestOf(bytes.Clone(a)) {
+		t.Error("the same contents produced two different digests")
+	}
+}
+
+func TestExtractLeavesDigestsZero(t *testing.T) {
+	// Extract does not compute digests: the payload digest already covers the
+	// whole archive. A zero here is the documented contract, and a test keeps
+	// a caller from mistaking it for a real digest.
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "f.txt"), []byte("body"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	var archive bytes.Buffer
+	if _, err := Create(&archive, root); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	entries, err := Extract(archive.Bytes(), filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	for _, e := range entries {
+		if e.Digest != ([32]byte{}) {
+			t.Errorf("%s: Extract filled a digest it does not compute", e.Name)
+		}
 	}
 }
