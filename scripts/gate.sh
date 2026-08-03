@@ -77,6 +77,14 @@ run_gate "golangci-lint" \
 run_gate "govulncheck" \
     bash -c "cd '$CLI_DIR' && govulncheck ./..."
 
+# --- End-to-end ---
+#
+# A small dataset so the gate stays fast; scripts/loopback.sh takes a size
+# argument for a longer soak.
+
+run_gate "loopback end-to-end" \
+    bash -c "'$ROOT/scripts/loopback.sh' 2 20 >/dev/null"
+
 # --- Summary ---
 
 echo ""
