@@ -135,14 +135,24 @@ Usage:
   dhow <command> [flags]
 
 Commands:
-  keygen    generate an operator key
-  send      encode a directory into a stream of QR frames
+  keygen    generate an operator key or a signing identity
+  send      encode a directory into a signed stream of QR frames
   display   loop a frame stream on screen for a camera to read
   recv      decode captured frames back into a directory
-  verify    check a received dataset against its transfer record
+  verify    check a received dataset against its signed manifest
   version   print version and ABI information
 
 Run "dhow <command> -h" for the flags of a command.
+
+Two keys, two jobs:
+  operator.key  shared by both operators; encrypts and authenticates frames
+  sender.key    held only by the sender; signs the manifest
+  sender.pub    the sender's public half; the receiver checks signatures with it
+
+The operator key alone cannot answer "who sent this", because both sides hold
+it. That is what the identity is for. Generate them with:
+  dhow keygen -kind operator -out operator.key
+  dhow keygen -kind identity -out sender.key
 
 Common flags:
   -json      machine-readable output on stdout
@@ -237,13 +247,38 @@ func emit(w io.Writer, asJSON bool, payload any, human string) error {
 // --- keygen ---
 
 type keygenResult struct {
+	Kind string `json:"kind"`
 	Path string `json:"path"`
 	Mode string `json:"mode"`
+	// PublicPath is the public half of an identity, empty for an operator key.
+	PublicPath string `json:"public_path,omitempty"`
+	// Fingerprint is the identity's short fingerprint, empty for an operator
+	// key. It is for comparing two machines by eye and is not an identifier.
+	Fingerprint string `json:"fingerprint,omitempty"`
+}
+
+// Key kinds accepted by `dhow keygen -kind`.
+const (
+	kindOperator = "operator"
+	kindIdentity = "identity"
+)
+
+// publicPathFor names the public half of an identity written to path.
+//
+// A trailing ".key" is replaced rather than appended to, so the default
+// "sender.key" produces "sender.pub" and not "sender.key.pub". The latter is
+// what the first version wrote, and it did not match the default -signer value
+// on the receiving side, which is a paper cut that turns the first transfer
+// into a debugging session.
+func publicPathFor(path string) string {
+	return strings.TrimSuffix(path, ".key") + ".pub"
 }
 
 func runKeygen(env Env, args []string) error {
 	fs := newFlagSet("keygen", env)
-	out := fs.String("out", "operator.key", "path to write the operator key to")
+	kind := fs.String("kind", kindOperator,
+		"key kind: operator (shared, encrypts) or identity (sender-only, signs)")
+	out := fs.String("out", "", "path to write the key to (default operator.key or sender.key)")
 	force := fs.Bool("force", false, "overwrite an existing key file")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
 	resolve := verbosityFlags(fs)
@@ -255,15 +290,46 @@ func runKeygen(env Env, args []string) error {
 		return &exitError{code: ExitUsage, err: err}
 	}
 
-	// Refuse to clobber a key by default. Overwriting one silently would
-	// destroy the only copy of a secret that cannot be regenerated.
-	if !*force {
-		if _, err := os.Stat(*out); err == nil {
-			return failf(ExitInput, "%s already exists; pass -force to overwrite", *out)
+	// The default output name depends on the kind, so it cannot be a flag
+	// default. Naming an identity "operator.key" would invite exactly the
+	// confusion the two kinds exist to prevent.
+	if *out == "" {
+		switch *kind {
+		case kindOperator:
+			*out = "operator.key"
+		case kindIdentity:
+			*out = "sender.key"
 		}
 	}
 
-	level.say(env.Stderr, loud, "drawing a key from the system CSPRNG\n")
+	switch *kind {
+	case kindOperator:
+		return keygenOperator(env, level, *out, *force, *asJSON)
+	case kindIdentity:
+		return keygenIdentity(env, level, *out, *force, *asJSON)
+	default:
+		return failf(ExitUsage, "-kind must be %q or %q, got %q",
+			kindOperator, kindIdentity, *kind)
+	}
+}
+
+// refuseToClobber stops keygen destroying a secret that cannot be regenerated.
+func refuseToClobber(path string, force bool) error {
+	if force {
+		return nil
+	}
+	if _, err := os.Stat(path); err == nil {
+		return failf(ExitInput, "%s already exists; pass -force to overwrite", path)
+	}
+	return nil
+}
+
+func keygenOperator(env Env, level verbosity, out string, force, asJSON bool) error {
+	if err := refuseToClobber(out, force); err != nil {
+		return err
+	}
+
+	level.say(env.Stderr, loud, "drawing an operator key from the system CSPRNG\n")
 
 	key, err := ffi.GenerateKey()
 	if err != nil {
@@ -271,17 +337,75 @@ func runKeygen(env Env, args []string) error {
 	}
 	defer key.Close()
 
-	if err := key.Save(*out); err != nil {
-		return failf(ExitInput, "writing %s: %w", *out, err)
+	if err := key.Save(out); err != nil {
+		return failf(ExitInput, "writing %s: %w", out, err)
 	}
 
-	if level == quiet && !*asJSON {
+	if level == quiet && !asJSON {
 		return nil
 	}
-	return emit(env.Stdout, *asJSON,
-		keygenResult{Path: *out, Mode: "0600"},
+	return emit(env.Stdout, asJSON,
+		keygenResult{Kind: kindOperator, Path: out, Mode: "0600"},
 		fmt.Sprintf("wrote operator key to %s (mode 0600)\n"+
-			"keep this file secret; both operators need the same key\n", *out))
+			"keep this file secret; both operators need the same key\n"+
+			"the sender also needs a signing identity: dhow keygen -kind identity\n", out))
+}
+
+func keygenIdentity(env Env, level verbosity, out string, force, asJSON bool) error {
+	pubPath := publicPathFor(out)
+	if err := refuseToClobber(out, force); err != nil {
+		return err
+	}
+	if err := refuseToClobber(pubPath, force); err != nil {
+		return err
+	}
+
+	level.say(env.Stderr, loud, "drawing a signing identity from the system CSPRNG\n")
+
+	identity, err := ffi.GenerateIdentity()
+	if err != nil {
+		return failf(ExitInternal, "generating identity: %w", err)
+	}
+	defer identity.Close()
+
+	public, err := identity.Public()
+	if err != nil {
+		return failf(ExitInternal, "deriving the public identity: %w", err)
+	}
+	defer public.Close()
+
+	// The secret first. A public half on disk with no secret beside it is
+	// merely useless; a secret with no public half is a transfer nobody can
+	// verify, and the operator would not find out until the receiver failed.
+	if err := identity.Save(out); err != nil {
+		return failf(ExitInput, "writing %s: %w", out, err)
+	}
+	if err := public.Save(pubPath); err != nil {
+		return failf(ExitInput, "writing %s: %w", pubPath, err)
+	}
+
+	fingerprint, err := public.Fingerprint()
+	if err != nil {
+		return failf(ExitInternal, "reading the fingerprint: %w", err)
+	}
+
+	if level == quiet && !asJSON {
+		return nil
+	}
+	return emit(env.Stdout, asJSON,
+		keygenResult{
+			Kind:        kindIdentity,
+			Path:        out,
+			Mode:        "0600",
+			PublicPath:  pubPath,
+			Fingerprint: fingerprint,
+		},
+		fmt.Sprintf("wrote signing identity to %s (mode 0600)\n"+
+			"wrote its public half to %s\n"+
+			"fingerprint %s\n\n"+
+			"%s never leaves the sending machine. Carry %s to the receiver and\n"+
+			"check the fingerprint there matches the one above before trusting it.\n",
+			out, pubPath, fingerprint, out, pubPath))
 }
 
 // loadKey opens the operator key, turning the core's diagnosis into an
@@ -319,56 +443,90 @@ func loadKey(path string) (*ffi.Key, error) {
 // --- send ---
 
 type sendResult struct {
-	SessionID  string `json:"session_id"`
+	SessionID string `json:"session_id"`
+	// Signer is the fingerprint of the identity that signed the manifest, so
+	// the sending operator can read out what the receiver must be holding.
+	Signer     string `json:"signer"`
 	Files      int    `json:"files"`
 	PayloadLen int    `json:"payload_bytes"`
 	Frames     int    `json:"frames"`
 	OutDir     string `json:"out_dir"`
 }
 
-// transferRecord is what a receiver needs to configure its decoder.
+// manifestName is the signed manifest written beside the frames.
 //
-// In the finished product this travels as the signed manifest inside the frame
-// stream. Until the optical layer and manifest frames exist, it is written
-// alongside the frames so send and recv can be exercised end to end. It carries
-// no secret: the salt and nonce are public by design, and the payload is
-// unreadable without the operator key.
-type transferRecord struct {
-	Version               int          `json:"version"`
-	SessionID             string       `json:"session_id"`
-	Salt                  string       `json:"salt"`
-	Nonce                 string       `json:"nonce"`
-	PayloadSize           uint64       `json:"payload_size"`
-	BlockCount            uint32       `json:"block_count"`
-	SymbolSize            uint32       `json:"symbol_size"`
-	SourceSymbolsPerBlock uint32       `json:"source_symbols_per_block"`
-	TotalSymbolsPerBlock  uint32       `json:"total_symbols_per_block"`
-	PayloadDigest         string       `json:"payload_digest"`
-	Files                 []fileRecord `json:"files"`
+// Until the optical layer carries a manifest frame, the manifest travels as a
+// file in the frame directory. That is a transport detail: the bytes are the
+// same signed structure either way, and every command that reads them verifies
+// the signature before acting on a single field.
+const manifestName = "manifest.bin"
+
+// readManifest loads and verifies the manifest beside a frame stream.
+//
+// expectSession is nil when the caller has nothing to bind the manifest to,
+// which is the ordinary case: the manifest is what says which session this is.
+//
+// Every failure here is fatal by design. A transfer whose manifest does not
+// verify is one where nothing else is worth checking, because every other
+// value the receiver would use comes from the manifest.
+func readManifest(dir, signerPath string, expectSession *[16]byte) (*ffi.Manifest, error) {
+	path := filepath.Join(dir, manifestName)
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// A frames directory from a build before the manifest was wired
+			// through has a transfer.json instead, and re-sending is the only
+			// way forward. Saying so is cheaper than letting the operator
+			// wonder where the file went.
+			if _, legacyErr := os.Stat(filepath.Join(dir, "transfer.json")); legacyErr == nil {
+				return nil, failf(ExitInput,
+					"%s holds a transfer.json and no %s; it was produced by a build that "+
+						"wrote an unsigned transfer record. Re-run \"dhow send\" to produce a "+
+						"signed manifest", dir, manifestName)
+			}
+			return nil, failf(ExitInput,
+				"no %s in %s; a frame stream is not receivable without its signed manifest",
+				manifestName, dir)
+		}
+		return nil, failf(ExitInput, "reading %s: %w", path, err)
+	}
+
+	public, err := loadSigner(signerPath)
+	if err != nil {
+		return nil, err
+	}
+	defer public.Close()
+
+	manifest, err := ffi.VerifyManifest(public, raw, expectSession)
+	if err != nil {
+		return nil, failf(ExitVerifyFailed,
+			"%s does not verify against %s: %w\n"+
+				"either it was not produced by the holder of that identity, or it has been "+
+				"altered since it was", path, signerPath, err)
+	}
+	return manifest, nil
 }
 
-// fileRecord is one file's entry in the transfer record's inventory.
-//
-// The inventory is what makes `dhow verify` mean something. Without it the
-// command can only count files, so a dataset of the right shape and entirely
-// wrong contents passes. With it, verify can be run months later against a
-// dataset sitting on disk and say exactly which file changed.
-type fileRecord struct {
-	// Name is the file's path within the dataset, slash-separated.
-	Name string `json:"name"`
-	// Size is its length in bytes.
-	Size int64 `json:"size"`
-	// Executable records whether the owner execute bit was set.
-	Executable bool `json:"executable"`
-	// Digest is the BLAKE3 digest of the contents, hex-encoded.
-	Digest string `json:"digest"`
+// loadSigner opens a public identity, turning a missing file into instructions.
+func loadSigner(path string) (*ffi.PublicIdentity, error) {
+	public, err := ffi.LoadPublicIdentity(path)
+	if err == nil {
+		return public, nil
+	}
+	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+		return nil, failf(ExitInput,
+			"no signer identity at %s; the sender produces one with "+
+				"\"dhow keygen -kind identity\" and carries the .pub half to this machine. "+
+				"Pass -signer with its path", path)
+	}
+	return nil, failf(ExitInput, "loading %s: %w", path, err)
 }
-
-const recordName = "transfer.json"
 
 func runSend(env Env, args []string) error {
 	fs := newFlagSet("send", env)
 	keyPath := fs.String("key", "operator.key", "operator key file")
+	identityPath := fs.String("identity", "sender.key", "signing identity file")
 	in := fs.String("in", "", "directory to send (required)")
 	outDir := fs.String("out", "frames", "directory to write frames to")
 	symbolSize := fs.Uint("symbol-size", 256, "bytes per symbol (64..65531)")
@@ -413,6 +571,12 @@ func runSend(env Env, args []string) error {
 		return err
 	}
 	defer key.Close()
+
+	identity, err := loadIdentity(*identityPath)
+	if err != nil {
+		return err
+	}
+	defer identity.Close()
 
 	var sessionID [16]byte
 	var salt [32]byte
@@ -467,51 +631,94 @@ func runSend(env Env, args []string) error {
 		}
 	}
 
-	inventory := make([]fileRecord, 0, len(entries))
+	inventory := make([]ffi.FileEntry, 0, len(entries))
 	for _, e := range entries {
-		inventory = append(inventory, fileRecord{
+		inventory = append(inventory, ffi.FileEntry{
 			Name:       e.Name,
-			Size:       e.Size,
+			Size:       uint64(e.Size),
+			Digest:     e.Digest,
 			Executable: e.Executable,
-			Digest:     hex.EncodeToString(e.Digest[:]),
 		})
 	}
 
-	record := transferRecord{
-		Version:               2,
-		SessionID:             hex.EncodeToString(sessionID[:]),
-		Salt:                  hex.EncodeToString(salt[:]),
-		Nonce:                 hex.EncodeToString(nonce[:]),
-		PayloadSize:           resolved.PayloadSize,
-		BlockCount:            resolved.BlockCount,
-		SymbolSize:            resolved.SymbolSize,
-		SourceSymbolsPerBlock: resolved.SourceSymbolsPerBlock,
-		TotalSymbolsPerBlock:  resolved.TotalSymbolsPerBlock,
-		PayloadDigest:         hex.EncodeToString(resolved.PayloadDigest[:]),
-		Files:                 inventory,
-	}
-	recordBytes, err := json.MarshalIndent(record, "", "  ")
+	manifest, err := ffi.BuildManifest(identity, sessionID, salt, nonce, resolved, inventory)
 	if err != nil {
-		return failf(ExitInternal, "encoding transfer record: %w", err)
+		return failf(ExitInternal, "signing the manifest: %w", err)
 	}
-	recordPath := filepath.Join(*outDir, recordName)
-	if err := os.WriteFile(recordPath, append(recordBytes, '\n'), 0o644); err != nil {
-		return failf(ExitInput, "writing %s: %w", recordPath, err)
+	defer manifest.Close()
+
+	manifestBytes, err := manifest.Bytes()
+	if err != nil {
+		return failf(ExitInternal, "serializing the manifest: %w", err)
+	}
+	manifestPath := filepath.Join(*outDir, manifestName)
+	if err := os.WriteFile(manifestPath, manifestBytes, 0o644); err != nil {
+		return failf(ExitInput, "writing %s: %w", manifestPath, err)
 	}
 
+	fingerprint, err := identityFingerprint(identity)
+	if err != nil {
+		return err
+	}
+
+	sessionHex := hex.EncodeToString(sessionID[:])
 	if level == quiet && !*asJSON {
 		return nil
 	}
 	return emit(env.Stdout, *asJSON,
 		sendResult{
-			SessionID:  record.SessionID,
+			SessionID:  sessionHex,
+			Signer:     fingerprint,
 			Files:      len(entries),
 			PayloadLen: len(payload),
 			Frames:     len(frames),
 			OutDir:     *outDir,
 		},
-		fmt.Sprintf("session   %s\nfiles     %d\npayload   %d bytes\nframes    %d\nwritten   %s\n",
-			record.SessionID, len(entries), len(payload), len(frames), *outDir))
+		fmt.Sprintf("session   %s\nsigner    %s\nfiles     %d\npayload   %d bytes\nframes    %d\nwritten   %s\n",
+			sessionHex, fingerprint, len(entries), len(payload), len(frames), *outDir))
+}
+
+// loadIdentity opens the signing identity, turning the core's diagnosis into an
+// instruction, for the same reason as loadKey.
+func loadIdentity(path string) (*ffi.Identity, error) {
+	identity, err := ffi.LoadIdentity(path)
+	if err == nil {
+		return identity, nil
+	}
+
+	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+		return nil, failf(ExitInput,
+			"no signing identity at %s; create one with "+
+				"\"dhow keygen -kind identity -out %s\". It is not the operator key: the "+
+				"operator key is shared with the receiver, and an identity both sides hold "+
+				"proves nothing about who sent a transfer", path, path)
+	}
+
+	if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm()&0o077 != 0 {
+		return nil, failf(ExitInput,
+			"%s is readable by other users (mode %04o); dhow refuses to sign with a key "+
+				"anyone else can read. Fix it with \"chmod 600 %s\", and generate a new "+
+				"identity if the machine is shared",
+			path, info.Mode().Perm(), path)
+	}
+
+	return nil, failf(ExitInput, "loading %s: %w", path, err)
+}
+
+// identityFingerprint returns the short fingerprint of an identity's public
+// half, so the sender can read out what the receiver must be configured with.
+func identityFingerprint(identity *ffi.Identity) (string, error) {
+	public, err := identity.Public()
+	if err != nil {
+		return "", failf(ExitInternal, "deriving the public identity: %w", err)
+	}
+	defer public.Close()
+
+	fingerprint, err := public.Fingerprint()
+	if err != nil {
+		return "", failf(ExitInternal, "reading the fingerprint: %w", err)
+	}
+	return fingerprint, nil
 }
 
 // planSession chooses coding parameters for a payload.
@@ -562,6 +769,7 @@ type recvResult struct {
 func runRecv(env Env, args []string) error {
 	fs := newFlagSet("recv", env)
 	keyPath := fs.String("key", "operator.key", "operator key file")
+	signerPath := fs.String("signer", "sender.pub", "public identity the manifest must be signed by")
 	in := fs.String("in", "frames", "directory holding captured frames")
 	outDir := fs.String("out", "received", "directory to extract into")
 	stateDir := fs.String("state", "", "directory to keep resumable progress in")
@@ -581,15 +789,21 @@ func runRecv(env Env, args []string) error {
 		return failf(ExitUsage, "-save-every must be at least 1")
 	}
 
-	record, err := readRecord(filepath.Join(*in, recordName))
+	// Nothing about this transfer is read before the signature is checked. The
+	// session, the salt, the nonce, and every coding parameter come from the
+	// manifest, so accepting an unverified one would mean decoding a transfer
+	// the sender never described.
+	manifest, err := readManifest(*in, *signerPath, nil)
 	if err != nil {
 		return err
 	}
+	defer manifest.Close()
 
-	sessionID, salt, nonce, params, err := record.decode()
+	sessionID, salt, nonce, params, inventory, err := manifestFields(manifest)
 	if err != nil {
 		return err
 	}
+	sessionHex := hex.EncodeToString(sessionID[:])
 
 	key, err := loadKey(*keyPath)
 	if err != nil {
@@ -737,6 +951,15 @@ func runRecv(env Env, args []string) error {
 		return err
 	}
 
+	// The payload digest already proved the archive is the one that was signed
+	// for, but not that the archive agrees with the inventory in the same
+	// manifest. A sender whose packing and manifest-building disagreed would
+	// produce exactly that, and the receiver is the last place it can be
+	// noticed before the dataset is handed to someone.
+	if err := reconcile(entries, inventory); err != nil {
+		return err
+	}
+
 	// The state has done its job. Leaving it behind would be picked up by the
 	// next transfer pointed at the same directory and rejected as a foreign
 	// session, which is a confusing way to learn that a stale file exists.
@@ -751,10 +974,10 @@ func runRecv(env Env, args []string) error {
 	}
 
 	human := fmt.Sprintf("session   %s\naccepted  %d frames\nrejected  %d frames\nfiles     %d\nwritten   %s\n",
-		record.SessionID, accepted, rejected, len(entries), *outDir)
+		sessionHex, accepted, rejected, len(entries), *outDir)
 	if resumed > 0 {
 		human = fmt.Sprintf("session   %s\nresumed   %d frames\naccepted  %d frames\nrejected  %d frames\nfiles     %d\nwritten   %s\n",
-			record.SessionID, resumed, accepted, rejected, len(entries), *outDir)
+			sessionHex, resumed, accepted, rejected, len(entries), *outDir)
 	}
 
 	stateShown := ""
@@ -763,7 +986,7 @@ func runRecv(env Env, args []string) error {
 	}
 	return emit(env.Stdout, *asJSON,
 		recvResult{
-			SessionID: record.SessionID,
+			SessionID: sessionHex,
 			Frames:    accepted,
 			Rejected:  rejected,
 			Resumed:   resumed,
@@ -931,17 +1154,23 @@ const (
 )
 
 type verifyResult struct {
-	OK        bool      `json:"ok"`
-	SessionID string    `json:"session_id"`
-	Files     int       `json:"files"`
-	Checked   int       `json:"files_checked"`
-	Bytes     int64     `json:"bytes_checked"`
-	Problems  []Problem `json:"problems"`
+	OK        bool   `json:"ok"`
+	SessionID string `json:"session_id"`
+	// Signer is the fingerprint of the identity whose signature was checked.
+	// Its presence is what distinguishes this report from the unsigned record
+	// verify used to check against, where a passing result said only that the
+	// dataset matched a file anyone could have written.
+	Signer   string    `json:"signer"`
+	Files    int       `json:"files"`
+	Checked  int       `json:"files_checked"`
+	Bytes    int64     `json:"bytes_checked"`
+	Problems []Problem `json:"problems"`
 }
 
 func runVerify(env Env, args []string) error {
 	fs := newFlagSet("verify", env)
-	in := fs.String("in", "frames", "directory holding the transfer record")
+	in := fs.String("in", "frames", "directory holding the signed manifest")
+	signerPath := fs.String("signer", "sender.pub", "public identity the manifest must be signed by")
 	dir := fs.String("dir", "received", "extracted dataset to check")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
 	resolve := verbosityFlags(fs)
@@ -953,24 +1182,37 @@ func runVerify(env Env, args []string) error {
 		return &exitError{code: ExitUsage, err: err}
 	}
 
-	record, err := readRecord(filepath.Join(*in, recordName))
+	manifest, err := readManifest(*in, *signerPath, nil)
+	if err != nil {
+		return err
+	}
+	defer manifest.Close()
+
+	sessionID, _, _, _, inventory, err := manifestFields(manifest)
+	if err != nil {
+		return err
+	}
+	sessionHex := hex.EncodeToString(sessionID[:])
+
+	signer, err := manifestSigner(*signerPath)
 	if err != nil {
 		return err
 	}
 
-	level.say(env.Stderr, loud, "checking %d files in %s against the transfer record\n",
-		len(record.Files), *dir)
+	level.say(env.Stderr, loud,
+		"manifest verifies against %s (%s); checking %d files in %s against it\n",
+		*signerPath, signer, len(inventory), *dir)
 
-	problems, checked, bytes := inspectDataset(*dir, record.Files)
+	problems, checked, bytes := inspectDataset(*dir, inventory)
 	ok := len(problems) == 0
 
 	var b strings.Builder
 	if ok {
-		fmt.Fprintf(&b, "session   %s\nfiles     %d\nbytes     %d\nresult    OK\n",
-			record.SessionID, checked, bytes)
+		fmt.Fprintf(&b, "session   %s\nsigner    %s\nfiles     %d\nbytes     %d\nresult    OK\n",
+			sessionHex, signer, checked, bytes)
 	} else {
-		fmt.Fprintf(&b, "session   %s\nfiles     %d checked of %d\nresult    FAILED\n",
-			record.SessionID, checked, len(record.Files))
+		fmt.Fprintf(&b, "session   %s\nsigner    %s\nfiles     %d checked of %d\nresult    FAILED\n",
+			sessionHex, signer, checked, len(inventory))
 		for _, p := range problems {
 			if p.File == "" {
 				fmt.Fprintf(&b, "  - %s\n", p.Detail)
@@ -988,8 +1230,9 @@ func runVerify(env Env, args []string) error {
 	if err := emit(env.Stdout, *asJSON,
 		verifyResult{
 			OK:        ok,
-			SessionID: record.SessionID,
-			Files:     len(record.Files),
+			SessionID: sessionHex,
+			Signer:    signer,
+			Files:     len(inventory),
 			Checked:   checked,
 			Bytes:     bytes,
 			Problems:  problems,
@@ -1009,7 +1252,7 @@ func runVerify(env Env, args []string) error {
 // number of bytes it read. It does not stop at the first problem: an operator
 // looking at a dataset that came back wrong needs the whole picture, not the
 // alphabetically first part of it.
-func inspectDataset(dir string, want []fileRecord) (problems []Problem, checked int, bytesRead int64) {
+func inspectDataset(dir string, want []ffi.FileEntry) (problems []Problem, checked int, bytesRead int64) {
 	info, err := os.Stat(dir)
 	switch {
 	case err != nil:
@@ -1041,7 +1284,7 @@ func inspectDataset(dir string, want []fileRecord) (problems []Problem, checked 
 		// Size is checked before the contents so a truncated file is reported
 		// as truncated rather than as a digest mismatch, which says nothing
 		// about what went wrong.
-		if fi.Size() != entry.Size {
+		if fi.Size() < 0 || uint64(fi.Size()) != entry.Size {
 			problems = append(problems, Problem{
 				File:   entry.Name,
 				Kind:   ProblemSize,
@@ -1071,14 +1314,15 @@ func inspectDataset(dir string, want []fileRecord) (problems []Problem, checked 
 			continue
 		}
 		checked++
-		bytesRead += entry.Size
+		bytesRead += fi.Size()
 
-		if digest != entry.Digest {
+		want := hex.EncodeToString(entry.Digest[:])
+		if digest != want {
 			problems = append(problems, Problem{
 				File: entry.Name,
 				Kind: ProblemContent,
 				Detail: fmt.Sprintf("contents differ: digest %s, expected %s",
-					shortDigest(digest), shortDigest(entry.Digest)),
+					shortDigest(digest), shortDigest(want)),
 			})
 		}
 	}
@@ -1197,63 +1441,98 @@ func runVersion(env Env, args []string) error {
 		fmt.Sprintf("dhow core %s (ABI %d)\n", ffi.Version(), ffi.ABIVersion()))
 }
 
-// --- transfer record ---
+// --- signed manifest ---
 
-func readRecord(path string) (*transferRecord, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, failf(ExitInput, "reading %s: %w", path, err)
-	}
-	var r transferRecord
-	if err := json.Unmarshal(data, &r); err != nil {
-		return nil, failf(ExitInput, "parsing %s: %w", path, err)
-	}
-	if r.Version != 2 {
-		return nil, failf(ExitInput,
-			"%s has unsupported version %d; this build writes and reads version 2",
-			path, r.Version)
-	}
-	return &r, nil
-}
-
-// decode turns the record's hex fields back into the values the core needs.
-func (r *transferRecord) decode() (sid [16]byte, salt [32]byte, nonce [24]byte, params ffi.SessionParams, err error) {
-	if err = decodeHexInto(sid[:], r.SessionID, "session_id"); err != nil {
+// manifestFields pulls everything a command needs out of a verified manifest.
+//
+// One function rather than five call sites reading five accessors, because
+// every command needs the same set and a command that read four of them would
+// be one that silently ignored a field the sender signed.
+func manifestFields(m *ffi.Manifest) (
+	sessionID [16]byte,
+	salt [32]byte,
+	nonce [24]byte,
+	params ffi.SessionParams,
+	inventory []ffi.FileEntry,
+	err error,
+) {
+	if sessionID, err = m.SessionID(); err != nil {
+		err = failf(ExitInternal, "reading the manifest session id: %w", err)
 		return
 	}
-	if err = decodeHexInto(salt[:], r.Salt, "salt"); err != nil {
+	if salt, err = m.Salt(); err != nil {
+		err = failf(ExitInternal, "reading the manifest salt: %w", err)
 		return
 	}
-	if err = decodeHexInto(nonce[:], r.Nonce, "nonce"); err != nil {
+	if nonce, err = m.Nonce(); err != nil {
+		err = failf(ExitInternal, "reading the manifest nonce: %w", err)
 		return
 	}
-
-	var digest [32]byte
-	if err = decodeHexInto(digest[:], r.PayloadDigest, "payload_digest"); err != nil {
+	if params, err = m.Params(); err != nil {
+		err = failf(ExitInternal, "reading the manifest session parameters: %w", err)
 		return
 	}
-
-	params = ffi.SessionParams{
-		PayloadSize:           r.PayloadSize,
-		BlockCount:            r.BlockCount,
-		SymbolSize:            r.SymbolSize,
-		SourceSymbolsPerBlock: r.SourceSymbolsPerBlock,
-		TotalSymbolsPerBlock:  r.TotalSymbolsPerBlock,
-		PayloadDigest:         digest,
+	if inventory, err = m.Files(); err != nil {
+		err = failf(ExitInternal, "reading the manifest inventory: %w", err)
+		return
 	}
 	return
 }
 
-// decodeHexInto decodes a hex string of exactly len(dst) bytes.
-func decodeHexInto(dst []byte, s, field string) error {
-	raw, err := hex.DecodeString(s)
+// manifestSigner returns the fingerprint of the identity a manifest was checked
+// against, for display.
+func manifestSigner(signerPath string) (string, error) {
+	public, err := loadSigner(signerPath)
 	if err != nil {
-		return failf(ExitInput, "%s is not valid hex: %w", field, err)
+		return "", err
 	}
-	if len(raw) != len(dst) {
-		return failf(ExitInput, "%s must be %d bytes, got %d", field, len(dst), len(raw))
+	defer public.Close()
+
+	fingerprint, err := public.Fingerprint()
+	if err != nil {
+		return "", failf(ExitInternal, "reading the signer fingerprint: %w", err)
 	}
-	copy(dst, raw)
+	return fingerprint, nil
+}
+
+// reconcile checks an extracted archive against the manifest that described it.
+//
+// The payload digest already proved the archive is the one the sender signed
+// for, so a disagreement here is not tampering: it is a sender whose packing
+// and manifest-building produced different answers about the same directory.
+// That would be a defect in dhow rather than an attack, and it is exactly the
+// class of defect that makes `dhow verify` untrustworthy in both directions, so
+// it fails the receive rather than being reported as a warning.
+func reconcile(extracted []pack.Entry, inventory []ffi.FileEntry) error {
+	if len(extracted) != len(inventory) {
+		return failf(ExitVerifyFailed,
+			"the archive holds %d files and the signed manifest names %d; "+
+				"this is a defect in dhow, not a damaged transfer",
+			len(extracted), len(inventory))
+	}
+
+	// Both lists are in the archive's order, which pack.Create sorts by name,
+	// so a positional comparison is the whole comparison.
+	for i, want := range inventory {
+		got := extracted[i]
+		switch {
+		case got.Name != want.Name:
+			return failf(ExitVerifyFailed,
+				"archive entry %d is %q and the signed manifest names %q; "+
+					"this is a defect in dhow, not a damaged transfer",
+				i, got.Name, want.Name)
+		case uint64(got.Size) != want.Size:
+			return failf(ExitVerifyFailed,
+				"%s is %d bytes in the archive and %d in the signed manifest; "+
+					"this is a defect in dhow, not a damaged transfer",
+				got.Name, got.Size, want.Size)
+		case got.Executable != want.Executable:
+			return failf(ExitVerifyFailed,
+				"%s disagrees with the signed manifest about its executable bit; "+
+					"this is a defect in dhow, not a damaged transfer",
+				got.Name)
+		}
+	}
 	return nil
 }
 
@@ -1302,6 +1581,7 @@ type displayResult struct {
 func runDisplay(env Env, args []string) error {
 	fs := newFlagSet("display", env)
 	in := fs.String("in", "frames", "directory holding the frames to show")
+	signerPath := fs.String("signer", "sender.pub", "public identity the manifest must be signed by")
 	fps := fs.Uint("fps", display.DefaultFPS, "frames per second")
 	loops := fs.Uint("loops", 0, "passes through the stream, or 0 to loop until stopped")
 	calibration := fs.Uint("calibration", 3, "seconds to hold the calibration pattern")
@@ -1321,14 +1601,22 @@ func runDisplay(env Env, args []string) error {
 		return failf(ExitUsage, "-qr-ecc must be a single letter L, M, Q, or H")
 	}
 
-	record, err := readRecord(filepath.Join(*in, recordName))
+	// display verifies the manifest too, even though it only needs the session
+	// identifier from it. The sender holds the public half of their own
+	// identity, the check costs nothing, and it means a frames directory that
+	// has been damaged since it was written is caught here rather than after
+	// twenty minutes in front of a screen.
+	manifest, err := readManifest(*in, *signerPath, nil)
 	if err != nil {
 		return err
 	}
-	sessionID, _, _, _, err := record.decode()
+	defer manifest.Close()
+
+	sessionID, err := manifest.SessionID()
 	if err != nil {
-		return err
+		return failf(ExitInternal, "reading the manifest session id: %w", err)
 	}
+	sessionHex := hex.EncodeToString(sessionID[:])
 
 	names, err := filepath.Glob(filepath.Join(*in, "frame-*.bin"))
 	if err != nil {
@@ -1374,13 +1662,13 @@ func runDisplay(env Env, args []string) error {
 	}
 	return emit(env.Stderr, *asJSON,
 		displayResult{
-			SessionID:   record.SessionID,
+			SessionID:   sessionHex,
 			Fingerprint: display.Fingerprint(sessionID),
 			Frames:      stats.FramesShown,
 			Loops:       stats.LoopsCompleted,
 			Seconds:     int(stats.Elapsed.Seconds()),
 		},
 		fmt.Sprintf("\nsession     %s\nfingerprint %s\nshown       %d frames over %d passes in %ds\n",
-			record.SessionID, display.Fingerprint(sessionID),
+			sessionHex, display.Fingerprint(sessionID),
 			stats.FramesShown, stats.LoopsCompleted, int(stats.Elapsed.Seconds())))
 }
