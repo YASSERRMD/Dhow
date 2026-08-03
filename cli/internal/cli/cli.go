@@ -601,9 +601,9 @@ func runSend(env Env, args []string) error {
 	level.say(env.Stderr, loud, "packed %d files into %d bytes; encoding\n",
 		len(entries), archive.Len())
 
-	frames, err := enc.Frames()
+	frameCount, err := enc.FrameCount()
 	if err != nil {
-		return failf(ExitInternal, "reading frames: %w", err)
+		return failf(ExitInternal, "counting frames: %w", err)
 	}
 	resolved, err := enc.Params()
 	if err != nil {
@@ -613,23 +613,36 @@ func runSend(env Env, args []string) error {
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		return failf(ExitInput, "creating %s: %w", *outDir, err)
 	}
-	for i, frame := range frames {
+
+	if len(*qrEcc) != 1 {
+		return failf(ExitUsage, "-qr-ecc must be a single letter L, M, Q, or H")
+	}
+
+	// One frame at a time, rather than pulling the whole stream into a
+	// [][]byte first. The encoder already holds every frame on the Rust side,
+	// so materialising a second copy in Go bought nothing and cost a full
+	// dataset's worth of resident memory - measured at roughly 1.1 times the
+	// dataset before this changed. The QR render, when asked for, happens in
+	// the same pass for the same reason.
+	for i := range frameCount {
+		frame, err := enc.Frame(i)
+		if err != nil {
+			return failf(ExitInternal, "reading frame %d: %w", i, err)
+		}
+
 		name := filepath.Join(*outDir, fmt.Sprintf("frame-%06d.bin", i))
 		if err := os.WriteFile(name, frame, 0o644); err != nil {
 			return failf(ExitInput, "writing %s: %w", name, err)
 		}
-	}
 
-	level.say(env.Stderr, loud, "wrote %d frames to %s\n", len(frames), *outDir)
-
-	if *emitQR {
-		if len(*qrEcc) != 1 {
-			return failf(ExitUsage, "-qr-ecc must be a single letter L, M, Q, or H")
-		}
-		if err := renderFrames(frames, *outDir, int(*qrVersion), (*qrEcc)[0], int(*qrScale)); err != nil {
-			return err
+		if *emitQR {
+			if err := renderFrame(frame, i, *outDir, int(*qrVersion), (*qrEcc)[0], int(*qrScale)); err != nil {
+				return err
+			}
 		}
 	}
+
+	level.say(env.Stderr, loud, "wrote %d frames to %s\n", frameCount, *outDir)
 
 	inventory := make([]ffi.FileEntry, 0, len(entries))
 	for _, e := range entries {
@@ -671,11 +684,11 @@ func runSend(env Env, args []string) error {
 			Signer:     fingerprint,
 			Files:      len(entries),
 			PayloadLen: len(payload),
-			Frames:     len(frames),
+			Frames:     frameCount,
 			OutDir:     *outDir,
 		},
 		fmt.Sprintf("session   %s\nsigner    %s\nfiles     %d\npayload   %d bytes\nframes    %d\nwritten   %s\n",
-			sessionHex, fingerprint, len(entries), len(payload), len(frames), *outDir))
+			sessionHex, fingerprint, len(entries), len(payload), frameCount, *outDir))
 }
 
 // loadIdentity opens the signing identity, turning the core's diagnosis into an
@@ -1544,34 +1557,32 @@ func reconcile(extracted []pack.Entry, inventory []ffi.FileEntry) error {
 	return nil
 }
 
-// renderFrames writes each frame as a QR code PNG beside its binary form.
+// renderFrame writes one frame as a QR code PNG beside its binary form.
 //
-// Rendering is a separate step from framing so a failure here cannot corrupt
-// the frame stream that has already been written: the transfer stays valid
-// even if the operator's chosen QR version turns out to be too small.
-func renderFrames(frames [][]byte, outDir string, version int, ecc byte, scale int) error {
-	for i, frame := range frames {
-		qr, err := ffi.EncodeQR(frame, version, ecc)
-		if err != nil {
-			// A frame that does not fit is a configuration error the operator
-			// can act on, so name the size rather than just failing.
-			return failf(ExitUsage,
-				"frame %d (%d bytes) will not fit a QR code at version %d level %c: %w",
-				i, len(frame), version, ecc, err)
-		}
+// The binary frame is written first and this cannot change it, so a failure
+// here leaves a valid frame stream behind: the transfer stays usable even if
+// the operator's chosen QR version turns out to be too small for it.
+func renderFrame(frame []byte, index int, outDir string, version int, ecc byte, scale int) error {
+	qr, err := ffi.EncodeQR(frame, version, ecc)
+	if err != nil {
+		// A frame that does not fit is a configuration error the operator can
+		// act on, so name the size rather than just failing.
+		return failf(ExitUsage,
+			"frame %d (%d bytes) will not fit a QR code at version %d level %c: %w",
+			index, len(frame), version, ecc, err)
+	}
 
-		name := filepath.Join(outDir, fmt.Sprintf("frame-%06d.png", i))
-		f, err := os.Create(name)
-		if err != nil {
-			return failf(ExitInput, "creating %s: %w", name, err)
-		}
-		if err := render.PNG(f, qr, scale); err != nil {
-			_ = f.Close()
-			return failf(ExitInternal, "rendering %s: %w", name, err)
-		}
-		if err := f.Close(); err != nil {
-			return failf(ExitInput, "closing %s: %w", name, err)
-		}
+	name := filepath.Join(outDir, fmt.Sprintf("frame-%06d.png", index))
+	f, err := os.Create(name)
+	if err != nil {
+		return failf(ExitInput, "creating %s: %w", name, err)
+	}
+	if err := render.PNG(f, qr, scale); err != nil {
+		_ = f.Close()
+		return failf(ExitInternal, "rendering %s: %w", name, err)
+	}
+	if err := f.Close(); err != nil {
+		return failf(ExitInput, "closing %s: %w", name, err)
 	}
 	return nil
 }

@@ -43,6 +43,17 @@ that is the shape of the answer, what was rejected, and what it costs. When a
 target finds something, the input goes in `fuzz/seeds/` and the fix goes in the
 same commit.
 
+## Benchmarks and memory
+
+`make bench` runs the criterion suite and the Go benchmarks;
+`scripts/rss.sh` measures peak resident memory against the budget the gate
+enforces. [docs/BENCHMARKS.md](docs/BENCHMARKS.md) has the committed baseline,
+why the memory budget is a ratio rather than a byte count, and what a 1 GiB
+transfer currently costs.
+
+A change to the data path should come with a before-and-after from
+`--save-baseline`, not an assertion that it is faster.
+
 ## Soaking
 
 `scripts/chaos.sh` runs randomised fault-injection rounds against the shipped

@@ -136,6 +136,25 @@ run_gate "operations guide drill" \
 run_gate "chaos soak (12 rounds)" \
     bash -c "'$ROOT/scripts/chaos.sh' 12 20260803 >/dev/null"
 
+# --- Performance and memory ---
+#
+# The benchmarks are built but not run to completion: a full criterion pass is
+# minutes, and a gate that takes minutes is a gate people skip. Building them
+# proves they have not rotted against the code they measure, which is the
+# failure that actually happens. Running them is `make bench`.
+#
+# The RSS budget is different: it is a *threshold*, so it has to run. It is
+# measured at 16 MiB rather than the 1 GiB the phase pack names, because what
+# the design fixes is a ratio and a ratio is the same at both sizes. See
+# docs/BENCHMARKS.md.
+
+run_gate "benchmarks build" \
+    bash -c "cd '$CORE_DIR' && cargo bench --bench data_path --no-run >/dev/null 2>&1 \
+             && cd '$CLI_DIR' && go test ./internal/pack/ -run '^\$' -bench . -benchtime 1x >/dev/null"
+
+run_gate "peak RSS budget" \
+    bash -c "'$ROOT/scripts/rss.sh' 16 12 8 >/dev/null"
+
 # --- Fuzzing ---
 #
 # Seconds per target, not minutes: a gate that takes an hour is a gate people

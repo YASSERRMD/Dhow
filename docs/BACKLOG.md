@@ -115,17 +115,41 @@ Recorded in `docs/UX-REVIEW.md`: no ETA or progress bar, `send` is silent while
 packing a large dataset, no `--dry-run`, and no config file or environment
 overrides.
 
-### B-6: `send` holds the whole payload in memory (Phase 28)
+### B-6: `send` holds the whole payload in memory (Phase 28, measured Phase 31)
 
 `runSend` packs the dataset into a `strings.Builder` and hands the result to
 the encoder as one `[]byte`, so peak memory is at least the size of the
-archive. The manifest work did not change this and does not make it worse, but
-it is the first thing a receiver-side RSS budget will hit, and it is a design
-issue rather than a tuning one: `pack.Create` streams, and the CLI immediately
-un-streams it.
+archive. `pack.Create` streams and the CLI immediately un-streams it.
 
-Phase 31 establishes the budget. Fixing this means an encoder that takes a
-reader, which is an FFI change.
+**Measured in Phase 31: `dhow send` peaks at 10.4x the dataset size** (16 MiB
+dataset, 166.9 MiB resident; 9.1x at 64 MiB as the fixed overhead amortises).
+For a 1 GiB dataset that is roughly **9 GiB resident**. The components are
+listed in `docs/BENCHMARKS.md`: the archive, the copy out of the builder, the
+ciphertext, and every frame held at once.
+
+`scripts/rss.sh` enforces a 12x budget in the gate, which is a regression check
+and not an endorsement of the number.
+
+Fixing it means an encoder that takes a reader rather than a slice. That is an
+FFI change - a new streaming handle with feed and poll, replacing the
+`payload`/`payload_len` pair in `dhow_encoder_new` - and a phase of its own.
+
+### B-8: `recv` holds the whole payload in memory (Phase 31)
+
+The same shape as B-6, one copy shallower. The decoder holds the symbols,
+reassembles the ciphertext, decrypts to a plaintext, and `dhow_decoder_finish`
+copies that into a Go buffer that `pack.Extract` then slices.
+
+**Measured: `dhow recv` peaks at 6.4x the dataset size** (16 MiB dataset, 102.2
+MiB resident; 5.9x at 64 MiB). For a 1 GiB dataset that is roughly **6 GiB
+resident**, on the machine least likely to have it - the receiver is
+deliberately off every network and is rarely the newest one in the building.
+
+Fixing it needs both a streaming `finish` across the ABI and a `pack.Extract`
+that reads from a reader rather than a slice. The second is the easier half and
+does not need an ABI change.
+
+`scripts/rss.sh` enforces an 8x budget.
 
 ## Closed
 

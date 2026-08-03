@@ -36,6 +36,8 @@ tool you can test end to end but not yet run across a real air gap.
 - [Verifying a Received Dataset](docs/VERIFY.md)
 - [Threat Model](docs/THREAT-MODEL.md)
 - [Fuzzing](docs/FUZZING.md) — the toolchain decision, the targets, the corpus
+- [Benchmarks and the Memory Budget](docs/BENCHMARKS.md) — baselines, and what
+  a 1 GiB transfer costs today
 - [Phase Log](docs/phase-log.md)
 
 Wire formats live in [proto/](proto/).
