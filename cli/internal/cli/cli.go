@@ -20,6 +20,12 @@
 // a later phase; this transport is what the loopback tests and the CI harness
 // use, and it keeps the codec and crypto path exercised end to end without
 // hardware.
+//
+// # Resuming
+//
+// recv -state <dir> keeps progress on disk so an interrupted capture is
+// continued rather than repeated. It is opt-in: without the flag, recv writes
+// nothing outside -out. See docs/RESUME.md.
 package cli
 
 import (
