@@ -152,7 +152,10 @@ fn test_version_string_is_nul_terminated() {
 
 #[test]
 fn test_status_string_covers_every_code() {
-    for code in -11..=0 {
+    // The lower bound tracks the most negative DhowStatus variant. A new code
+    // without a description would otherwise read as "unknown status" to every
+    // caller and nothing would notice.
+    for code in (DhowStatus::ResumeRejected as i32)..=0 {
         let ptr = dhow_status_string(code);
         let s = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_str().unwrap();
         assert!(!s.is_empty());
@@ -545,4 +548,285 @@ impl std::ops::Deref for PathBufSanitized {
     fn deref(&self) -> &Self::Target {
         &self.0
     }
+}
+
+// --- Resume across the ABI ---
+
+/// Builds an encoder plus the parameters a decoder needs for the same session.
+fn encode_session(plaintext: &[u8]) -> (*mut DhowKey, Vec<Vec<u8>>, DhowSessionParams) {
+    let key = dhow_key_generate();
+    assert!(!key.is_null());
+
+    let params = params_for(plaintext.len());
+    let encoder = unsafe {
+        dhow_encoder_new(
+            key,
+            SESSION.as_ptr(),
+            SALT.as_ptr(),
+            NONCE.as_ptr(),
+            params,
+            plaintext.as_ptr(),
+            plaintext.len(),
+        )
+    };
+    assert!(!encoder.is_null());
+
+    let frames = drain_frames(encoder);
+    let mut resolved = params;
+    assert_eq!(
+        unsafe { dhow_encoder_params(encoder, &mut resolved) },
+        DhowStatus::Ok
+    );
+    unsafe { dhow_encoder_free(encoder) };
+
+    (key, frames, resolved)
+}
+
+/// Feeds `frames` to a new decoder for `params` and returns the handle.
+fn decoder_fed(
+    key: *mut DhowKey,
+    params: DhowSessionParams,
+    frames: &[Vec<u8>],
+) -> *mut DhowDecoder {
+    let decoder = unsafe { dhow_decoder_new(key, SESSION.as_ptr(), SALT.as_ptr(), params) };
+    assert!(!decoder.is_null());
+    for frame in frames {
+        assert_eq!(
+            unsafe { dhow_decoder_accept(decoder, frame.as_ptr(), frame.len()) },
+            DhowStatus::Ok
+        );
+    }
+    decoder
+}
+
+/// Reads a decoder's resume state using the two-call size convention.
+fn resume_state_of(decoder: *mut DhowDecoder, journal_bytes: u64) -> Vec<u8> {
+    let mut needed = 0usize;
+    assert_eq!(
+        unsafe {
+            dhow_decoder_resume_state(decoder, journal_bytes, ptr::null_mut(), 0, &mut needed)
+        },
+        DhowStatus::Ok
+    );
+    assert!(needed > 0);
+
+    let mut buf = vec![0u8; needed];
+    let mut written = 0usize;
+    assert_eq!(
+        unsafe {
+            dhow_decoder_resume_state(
+                decoder,
+                journal_bytes,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut written,
+            )
+        },
+        DhowStatus::Ok
+    );
+    assert_eq!(written, needed);
+    buf
+}
+
+#[test]
+fn test_resume_state_round_trips_across_the_abi() {
+    let plaintext: Vec<u8> = (0..4096).map(|i| (i % 251) as u8).collect();
+    let (key, frames, params) = encode_session(&plaintext);
+
+    let taken = &frames[..frames.len() / 2];
+    let journal_bytes: u64 = taken.iter().map(|f| f.len() as u64).sum();
+
+    let first = decoder_fed(key, params, taken);
+    let state = resume_state_of(first, journal_bytes);
+    unsafe { dhow_decoder_free(first) };
+
+    // What a restart reads back before it can build anything.
+    let mut session_id = [0u8; 16];
+    let mut read_bytes = 0u64;
+    let mut block_count = 0u32;
+    assert_eq!(
+        unsafe {
+            dhow_resume_state_read(
+                state.as_ptr(),
+                state.len(),
+                session_id.as_mut_ptr(),
+                &mut read_bytes,
+                &mut block_count,
+            )
+        },
+        DhowStatus::Ok
+    );
+    assert_eq!(session_id, SESSION);
+    assert_eq!(read_bytes, journal_bytes);
+    assert_eq!(block_count, params.block_count);
+
+    // Replay, verify, then finish from the frames that were still to come.
+    let second = decoder_fed(key, params, taken);
+    assert_eq!(
+        unsafe { dhow_decoder_resume_verify(second, state.as_ptr(), state.len()) },
+        DhowStatus::Ok
+    );
+
+    for frame in &frames[taken.len()..] {
+        assert_eq!(
+            unsafe { dhow_decoder_accept(second, frame.as_ptr(), frame.len()) },
+            DhowStatus::Ok
+        );
+    }
+    assert_eq!(unsafe { dhow_decoder_is_complete(second) }, 1);
+
+    unsafe {
+        dhow_decoder_free(second);
+        dhow_key_free(key);
+    }
+}
+
+#[test]
+fn test_resume_verify_rejects_a_divergent_replay() {
+    let plaintext: Vec<u8> = (0..2048).map(|i| (i % 251) as u8).collect();
+    let (key, frames, params) = encode_session(&plaintext);
+
+    let taken = &frames[..8];
+    let full = decoder_fed(key, params, taken);
+    let state = resume_state_of(full, 1000);
+    unsafe { dhow_decoder_free(full) };
+
+    let short = decoder_fed(key, params, &taken[..7]);
+    let status = unsafe { dhow_decoder_resume_verify(short, state.as_ptr(), state.len()) };
+    assert_eq!(status, DhowStatus::ResumeRejected);
+
+    unsafe {
+        dhow_decoder_free(short);
+        dhow_key_free(key);
+    }
+}
+
+#[test]
+fn test_resume_state_read_rejects_a_corrupted_file() {
+    let plaintext: Vec<u8> = (0..1024).map(|i| (i % 251) as u8).collect();
+    let (key, frames, params) = encode_session(&plaintext);
+    let decoder = decoder_fed(key, params, &frames[..4]);
+    let good = resume_state_of(decoder, 500);
+
+    // Every byte the digests cover must be load-bearing at the boundary too,
+    // not only inside Rust.
+    for offset in [0usize, 4, 8, 30, 40, 92, 100] {
+        let mut bad = good.clone();
+        bad[offset] ^= 0x01;
+        assert_eq!(
+            unsafe {
+                dhow_resume_state_read(
+                    bad.as_ptr(),
+                    bad.len(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                )
+            },
+            DhowStatus::ResumeRejected,
+            "corruption at offset {offset} was accepted"
+        );
+        assert_eq!(
+            unsafe { dhow_decoder_resume_verify(decoder, bad.as_ptr(), bad.len()) },
+            DhowStatus::ResumeRejected,
+            "verify accepted corruption at offset {offset}"
+        );
+    }
+
+    unsafe {
+        dhow_decoder_free(decoder);
+        dhow_key_free(key);
+    }
+}
+
+#[test]
+fn test_resume_calls_reject_null_arguments() {
+    let state = [0u8; 128];
+
+    assert_eq!(
+        unsafe { dhow_decoder_resume_state(ptr::null(), 0, ptr::null_mut(), 0, ptr::null_mut()) },
+        DhowStatus::NullArgument
+    );
+    assert_eq!(
+        unsafe { dhow_decoder_resume_verify(ptr::null(), state.as_ptr(), state.len()) },
+        DhowStatus::NullArgument
+    );
+    assert_eq!(
+        unsafe {
+            dhow_resume_state_read(
+                ptr::null(),
+                16,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+            )
+        },
+        DhowStatus::NullArgument
+    );
+}
+
+#[test]
+fn test_resume_state_honours_the_buffer_size_contract() {
+    let plaintext: Vec<u8> = (0..1024).map(|i| (i % 251) as u8).collect();
+    let (key, frames, params) = encode_session(&plaintext);
+    let decoder = decoder_fed(key, params, &frames[..4]);
+
+    let mut needed = 0usize;
+    assert_eq!(
+        unsafe { dhow_decoder_resume_state(decoder, 0, ptr::null_mut(), 0, &mut needed) },
+        DhowStatus::Ok
+    );
+
+    // One byte short must fail without writing, not truncate silently.
+    let mut small = vec![0xEEu8; needed - 1];
+    let mut written = 0usize;
+    assert_eq!(
+        unsafe {
+            dhow_decoder_resume_state(decoder, 0, small.as_mut_ptr(), small.len(), &mut written)
+        },
+        DhowStatus::BufferTooSmall
+    );
+    assert!(
+        small.iter().all(|&b| b == 0xEE),
+        "a rejected call wrote into the caller's buffer"
+    );
+
+    unsafe {
+        dhow_decoder_free(decoder);
+        dhow_key_free(key);
+    }
+}
+
+#[test]
+fn test_resume_state_read_rejects_a_truncated_file() {
+    let plaintext: Vec<u8> = (0..1024).map(|i| (i % 251) as u8).collect();
+    let (key, frames, params) = encode_session(&plaintext);
+    let decoder = decoder_fed(key, params, &frames[..4]);
+    let good = resume_state_of(decoder, 500);
+
+    for len in [0usize, 1, 64, 127, good.len() - 1] {
+        assert_eq!(
+            unsafe {
+                dhow_resume_state_read(
+                    good.as_ptr(),
+                    len,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                )
+            },
+            DhowStatus::ResumeRejected,
+            "a {len}-byte state was accepted"
+        );
+    }
+
+    unsafe {
+        dhow_decoder_free(decoder);
+        dhow_key_free(key);
+    }
+}
+
+#[test]
+fn test_abi_version_is_two() {
+    assert_eq!(dhow_abi_version(), 2);
 }
