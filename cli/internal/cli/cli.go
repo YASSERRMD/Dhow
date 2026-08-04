@@ -29,6 +29,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -566,12 +567,17 @@ func runSend(env Env, args []string) error {
 
 	level.say(env.Stderr, loud, "packing %s\n", *in)
 
-	var archive strings.Builder
+	// A bytes.Buffer rather than a strings.Builder, because Buffer.Bytes()
+	// hands back the buffer itself and String() cannot: a string is immutable,
+	// so converting one to a []byte copies it. pack.Create streams into this
+	// and the previous code immediately un-streamed it into a second copy of
+	// the whole archive.
+	var archive bytes.Buffer
 	entries, err := pack.Create(&archive, *in)
 	if err != nil {
 		return failf(ExitInput, "packing %s: %w", *in, err)
 	}
-	payload := []byte(archive.String())
+	payload := archive.Bytes()
 
 	key, err := loadKey(*keyPath)
 	if err != nil {
@@ -606,7 +612,7 @@ func runSend(env Env, args []string) error {
 	defer enc.Close()
 
 	level.say(env.Stderr, loud, "packed %d files into %d bytes; encoding\n",
-		len(entries), archive.Len())
+		len(entries), len(payload))
 
 	frameCount, err := enc.FrameCount()
 	if err != nil {
