@@ -23,7 +23,7 @@ use dhow_codec::qr::{
 };
 use dhow_codec::resume::ResumeFile;
 use dhow_codec::session::{RaptorQParams, SessionParams};
-use dhow_crypt::aead::{TransferKeys, decrypt_payload, encrypt_payload};
+use dhow_crypt::aead::{TransferKeys, decrypt_payload_in_place, encrypt_payload};
 use dhow_crypt::kdf::Salt;
 use dhow_crypt::key::{
     IdentityKey, OperatorKey, PublicIdentity, load_identity, load_operator, load_public,
@@ -636,11 +636,14 @@ pub unsafe extern "C" fn dhow_decoder_finish(
             Err(e) => return fail(DhowStatus::KeyFailed, e.to_string()),
         };
 
-        let plaintext = match decrypt_payload(
+        // In place: `ciphertext` is this function's own buffer and nothing
+        // reads it afterwards, so decrypting into a second allocation would
+        // hold two copies of the whole payload at once on the receiver.
+        let plaintext = match decrypt_payload_in_place(
             &keys,
             &dhow_crypt::aead::Nonce::from_bytes(nonce_bytes),
             &sid,
-            &ciphertext,
+            ciphertext,
         ) {
             Ok(p) => p,
             Err(e) => return fail(DhowStatus::CryptoFailed, e.to_string()),

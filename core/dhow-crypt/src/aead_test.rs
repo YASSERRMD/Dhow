@@ -243,3 +243,51 @@ fn test_nonce_debug_is_abbreviated() {
     assert!(rendered.contains(".."));
     assert!(rendered.len() < 32);
 }
+
+/// The in-place and borrowing decryptions must agree byte for byte.
+///
+/// They are two routes through the same AEAD and one of them is now on the
+/// receiver's path. A divergence would not be caught by any round-trip test
+/// that used only one of them, which is exactly how a "harmless refactor"
+/// changes a construction.
+#[test]
+fn in_place_decryption_matches_the_borrowing_form() {
+    let keys = keys();
+    let nonce = nonce();
+
+    for len in [0usize, 1, 15, 16, 17, 1024, 65537] {
+        let plaintext: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let ciphertext = encrypt_payload(&keys, &nonce, &SESSION, &plaintext).unwrap();
+
+        let borrowed = decrypt_payload(&keys, &nonce, &SESSION, &ciphertext).unwrap();
+        let in_place =
+            decrypt_payload_in_place(&keys, &nonce, &SESSION, ciphertext.clone()).unwrap();
+
+        assert_eq!(borrowed, plaintext, "borrowing form at {len} bytes");
+        assert_eq!(in_place, plaintext, "in-place form at {len} bytes");
+    }
+}
+
+/// A tampered ciphertext must fail in place exactly as it does borrowing, and
+/// must not return the decrypted prefix it computed before the tag failed.
+#[test]
+fn in_place_decryption_rejects_tampering_without_leaking_a_prefix() {
+    let keys = keys();
+    let nonce = nonce();
+
+    let plaintext = vec![0xA5u8; 4096];
+    let ciphertext = encrypt_payload(&keys, &nonce, &SESSION, &plaintext).unwrap();
+
+    for offset in [0usize, 1, 2048, 4095, 4096] {
+        let mut damaged = ciphertext.clone();
+        damaged[offset] ^= 0x01;
+        assert!(
+            decrypt_payload_in_place(&keys, &nonce, &SESSION, damaged).is_err(),
+            "a byte flipped at offset {offset} was accepted"
+        );
+    }
+
+    // Too short to hold a tag at all.
+    assert!(decrypt_payload_in_place(&keys, &nonce, &SESSION, vec![0u8; 4]).is_err());
+    assert!(decrypt_payload_in_place(&keys, &nonce, &SESSION, Vec::new()).is_err());
+}
