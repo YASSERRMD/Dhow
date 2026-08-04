@@ -14,6 +14,99 @@ that generated them.
 spec's stated versions match the code's; the compatibility policy says what
 happens on every version a receiver can be handed.
 
+### The document that calls itself the source of truth was wrong
+
+`proto/README.md` said **Version 1.0** and listed the manifest and resume file
+as **v1**. Both have been v2 since Phases 24 and 28. It also said reserved
+fields are "ignored by the receiver", which no parser in this tree has ever done
+and which `migration.md` was corrected about in Phase 28.
+
+Three stale claims in a twenty-line document, in the file that opens by calling
+itself the single source of truth for every wire format. That is what happens to
+a summary nobody regenerates, and it is the same failure mode as the threat
+model's Status column in Phase 32 - a document that is written once and
+consulted afterwards.
+
+### The compatibility policy is a table of what to *do*
+
+A version number that does not say what a receiver should do with it is
+decoration. The policy is written as the decision table instead: current version
+parse, lower version reject, higher version reject, wrong magic reject, non-zero
+reserved reject, declared length past the buffer reject.
+
+**There is no forward or backward compatibility within the suite**, and the
+reason is stated rather than left as an omission: across an air gap there is no
+back channel, so a receiver that half-understands a structure is guessing about
+data it cannot re-request. Rejecting and telling the operator to re-send is the
+only answer that cannot be wrong.
+
+The policy also states what the reserved-field rule costs. A reserved field
+cannot be quietly repurposed, because every existing receiver rejects a non-zero
+value - so giving one a meaning needs a version bump. That is the intended trade
+and it is better written down than discovered.
+
+### The conformance suite tested the wrong thing
+
+`check_spec.py` checks the documents against themselves. `conformance_test.py`
+checks the golden vectors against the documents. Both are worth having, and
+**neither would notice if the implementation had drifted from both** - the
+vectors are produced by a script that encodes the same assumptions the documents
+do, so the two can be consistently wrong together.
+
+`scripts/conformance_cli.py` builds `dhow`, runs a real transfer, and reads the
+bytes it produced at the offsets `proto/` declares. Its constants are
+transcribed from the documents rather than imported from the code, and it
+reimplements CRC32C, because importing either would make it agree with the
+implementation by construction.
+
+**Shown to bite, in the way that matters.** Changing `MANIFEST_VERSION` from 2
+to 3 leaves the implementation entirely self-consistent:
+
+```
+--- implementation is self-consistent: ---
+test result: ok. 37 passed; 0 failed
+--- conformance against the spec: ---
+  FAIL  manifest version is 3, expected 2. The suite is frozen at 2.0.
+  FAIL  `dhow recv -key` exited 0, expected 3
+  FAIL  a rejected manifest still produced output
+=== CLI CONFORMANCE FAILED: 3 problem(s) ===
+```
+
+Thirty-seven manifest unit tests pass while the spec is violated, because they
+test the implementation against itself. That is the gap this suite closes, and
+it is the suite a third party points at their own receiver.
+
+It checks every frame rather than a sample. They are cheap, and a format defect
+affecting only the last block of a transfer is exactly what a sample misses.
+
+### Gate output
+
+24 checks, up from 23.
+
+```
+$ ./scripts/gate.sh
+=== GATE SUMMARY ===
+  Passed:  24
+  Failed:  0
+  Skipped: 0
+ALL GATES PASSED
+```
+
+### Deviation: the suite is frozen at 2.0, not 1.0
+
+The phase pack says "format spec freeze v1.0". The formats reached 2.0 in Phase
+28, when the manifest gained the session parameters, and calling the frozen set
+1.0 would mean either renumbering a format that has already shipped or printing
+a version that does not match the version byte in the file. Frozen at **2.0**,
+which is what the documents and the code both say.
+
+### Deviation: 4 atomic commits
+
+The objective, the frozen spec with its policy, the conformance suite, and the
+log. The policy and the corrected version table are one document and one
+decision; splitting them would leave the README internally inconsistent between
+commits.
+
 ## Phase 33 - Reproducible builds, SBOM, and a signed release
 
 **Objective:** a release nobody can reproduce is a release nobody can audit. If
