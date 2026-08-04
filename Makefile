@@ -1,6 +1,6 @@
 # Dhow Makefile - convenience targets
 
-.PHONY: build test lint gate clean audit deny govulncheck fmt clippy spec-check vectors fuzz bench rss
+.PHONY: build test lint gate clean audit deny govulncheck fmt clippy spec-check vectors fuzz bench rss release release-check
 
 build:
 	cd core && cargo build
@@ -50,3 +50,9 @@ bench:
 
 rss:
 	scripts/rss.sh
+
+release:
+	scripts/release.sh
+
+release-check:
+	scripts/release.sh --check
