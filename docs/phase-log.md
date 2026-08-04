@@ -1,5 +1,19 @@
 # Phase Log
 
+## Phase 34 - Format spec freeze and a conformance suite
+
+**Objective:** `proto/` claims to be the single source of truth for every wire
+format, and a third party implementing a receiver has no way to check that claim
+except by reading the Rust. This phase freezes the format set, writes the
+compatibility policy that says what a conforming implementation must accept and
+must reject, and turns the conformance suite into something that tests **the
+shipped binary** rather than testing the golden vectors against the document
+that generated them.
+
+**Gates:** the conformance suite runs against a built `dhow` and passes; the
+spec's stated versions match the code's; the compatibility policy says what
+happens on every version a receiver can be handed.
+
 ## Phase 33 - Reproducible builds, SBOM, and a signed release
 
 **Objective:** a release nobody can reproduce is a release nobody can audit. If
