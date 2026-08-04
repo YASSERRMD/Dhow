@@ -9,6 +9,21 @@ Wire-format changes are marked **BREAKING** and carry a pointer to
 
 ## Unreleased
 
+### Phase 39 — The four untested security claims
+
+- `scripts/security_lint.py` and a `[bans]` denylist in `deny.toml`, both in the
+  gate (28 checks now). Four threat-model rows move from Review and Absent to
+  **Enforced**, each shown to bite. **[B-9](docs/BACKLOG.md) closed.**
+- **Fixed: fifteen FFI entry points caught no unwind** — seven `*_free`
+  functions whose `Drop` runs unguarded, five accessors, and
+  `dhow_last_error_message`, whose `RefCell::borrow` panics on re-entry.
+- **Fixed: `TransferSecrets` renamed to `TransferParameters`.** Its own doc
+  comment said neither field is secret.
+- **Fixed: the tamper tests sometimes did not tamper.** `printf '\xa5' | dd`
+  sets a byte rather than flipping it, so one time in 256 per offset the
+  "tampered" file was identical to the original and the harness reported a
+  failure. About three per cent per loopback run.
+
 ### Phase 38 — Memory: the copies that do not need an ABI change
 
 - `dhow send` peaks at **7.6x** the dataset size, down from 10.4x; `dhow recv` at

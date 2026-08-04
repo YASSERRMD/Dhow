@@ -1,5 +1,121 @@
 # Phase Log
 
+## Phase 39 - The four untested security claims
+
+**Objective:** the Phase 32 traceability table found six threat-model controls
+that nothing enforced. Two are not worth testing - observing a zeroized buffer
+means reading freed memory, and photographing a screen is not a unit test. The
+other four are each a scan over a small surface, they belong together as one
+lint pass, and none of them was done. This phase does them and closes **B-9**.
+
+**Gates:** one lint in `scripts/gate.sh` (twenty-eight checks now), each of the
+four shown to bite by breaking the thing it checks, and the Status column in
+`docs/THREAT-MODEL.md` moved from Review and Absent to Enforced with the
+demonstration named beside each.
+
+### Every scan found something, and one found itself
+
+The point of writing a check for a property you believe holds is to find out
+whether it does.
+
+**Row 45, unwind guards: fifteen entry points had none.** The threat model has
+claimed since Phase 2 that every FFI entry point catches unwinds, and Phase 32
+marked it Review because nothing checked. Seven `*_free` functions - whose
+signature returns nothing, so there is no channel to report through, which is
+not an argument that an unwind across the boundary is defined; a `Drop` impl is
+exactly the place a panic appears without anyone having written one. Five
+count-and-capacity accessors. And `dhow_last_error_message`, whose
+`RefCell::borrow` panics if the slot is already borrowed mutably, which a
+re-entrant caller can arrange from outside the library. `guard_unit` and
+`guard_int` join the two that existed.
+
+**Row 9, secret comparisons: a type named for a secret it does not hold.**
+`TransferSecrets` is a salt and a nonce, both carried in the signed manifest,
+and its own doc comment says "Neither is secret". Renamed to
+`TransferParameters`. This is the same defect the Phase 32 audit found when the
+threat model called a symmetric operator key an Ed25519 identity key, and it is
+worth noticing that both were found by a mechanical reader rather than by
+somebody rereading the prose.
+
+**And the secret-comparison scan did not work.** Replacing `OperatorKey`'s
+`ct_eq` with `==` produced **no finding**. The scan looked for a secret type
+named on the same line as the comparison, and the comparison that actually gets
+written is `self.bytes == other.bytes` inside the type's own `impl`, which names
+nothing at all. It now tracks which impl block it is in. This is the whole
+reason the demonstration is required rather than optional: a check that passes
+on a clean tree and passes on a broken one is worse than no check, because it
+is recorded as evidence.
+
+### The demonstration
+
+Each of the four, broken one at a time:
+
+```
+FAIL  secret comparison: core/dhow-crypt/src/key.rs:139: `==` or `!=` reachable
+      from OperatorKey; secrets are compared with subtle::ConstantTimeEq
+          self.bytes == other.bytes
+FAIL  raw keys: core/include/dhow.h:222: parameter `key_bytes` is a byte pointer
+      named like a key; key material crosses this ABI as an opaque handle
+          int32_t dhow_key_import(const uint8_t *key_bytes, size_t len);
+FAIL  unwind guard: core/dhow-ffi/src/handle.rs:159: `dhow_key_generate` does not
+      open with a guard; an unwind across the ABI is undefined behaviour
+FAIL  network denylist: deny.toml's deny list does not name `tokio`; this script
+      and the denylist have drifted apart
+```
+
+### Row 46 is a denylist, not a scan
+
+The master spec says any dependency that opens a socket in the data path is a
+build failure and that CI enforces it. Nothing did. The enforcement is a
+`[bans] deny` list in `deny.toml` rather than a source scan, because `cargo deny`
+walks the **resolved** graph: a scan of `Cargo.toml` would see only what this
+workspace names directly, and the way a networking crate actually arrives is
+three levels down inside something that turned on a feature. The lint checks the
+denylist still names each crate, so the two cannot drift apart.
+
+It is a tripwire on the paths a dependency takes to reach a socket, not a proof
+that none can. That distinction is in the comment beside the list.
+
+### A tamper test that sometimes did not tamper
+
+The gate run for this phase failed here:
+
+```
+  FAIL  a manifest altered at offset 40 exited 0, expected 3
+```
+
+and passed on the next attempt. Every tamper check in `scripts/loopback.sh` and
+`scripts/chaos.sh` used `printf '\xa5' | dd ... seek=N`, which **sets** a byte
+rather than flipping it. When the byte already held that value the "tampered"
+file was byte-identical to the original, the transfer correctly succeeded, and
+the harness reported a failure. The manifest carries a random session id, salt,
+and nonce, so it is one in 256 per offset - about three per cent per run across
+the loopback's seven offsets.
+
+Often enough to look like flakiness and be dismissed, rare enough that nobody
+had. `flip_byte` reads the byte and writes a different one. Five consecutive
+loopback runs and a chaos soak clean afterwards.
+
+The lesson is the one Phase 34 recorded from the other direction: a gate that
+fails intermittently is not noise to be retried, it is a defect in the gate or
+in the thing it measures, and the only way to tell is to look.
+
+### Gate run
+
+```
+=== GATE SUMMARY ===
+  Passed:  28
+  Failed:  0
+  Skipped: 0
+ALL GATES PASSED
+```
+
+### Deviation: 8 commits
+
+Against the pack's floor of twenty. Four checks, two defects they found, the
+gate wiring, and the documents. Padding that into twenty would be the behaviour
+Phases 30 to 38 declined and recorded instead.
+
 ## Phase 38 - Memory: the copies that do not need an ABI change
 
 **Named for what it did.** The objective it was given was streaming encode and
