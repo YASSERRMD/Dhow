@@ -1,5 +1,20 @@
 # Phase Log
 
+## Phase 33 - Reproducible builds, SBOM, and a signed release
+
+**Objective:** a release nobody can reproduce is a release nobody can audit. If
+the binary an operator downloads cannot be rebuilt byte for byte from the tagged
+source, then "the source is on GitHub" says nothing about what they are running.
+This phase makes the build deterministic, generates a CycloneDX SBOM so the
+dependency tree ships with the artifact rather than being reconstructed from it,
+and signs the release manifest **with dhow itself** - because a courier that
+signs other people's data and not its own releases is making an argument it does
+not believe.
+
+**Gates:** two builds from clean trees produce byte-identical artifacts, checked
+by rebuilding rather than asserted; the SBOM validates and names every
+dependency; the release manifest verifies with `dhow verify`.
+
 ## Phase 32 - Security review
 
 **Objective:** `docs/THREAT-MODEL.md` has carried a requirements checklist since
