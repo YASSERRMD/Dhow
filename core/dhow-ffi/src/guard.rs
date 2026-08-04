@@ -51,3 +51,41 @@ where
         }
     }
 }
+
+/// Runs `body`, swallowing a panic, for entry points that return nothing.
+///
+/// The `*_free` functions have no channel to report through: their signature
+/// returns `()` and a caller has no handle left to ask about. That does not
+/// make an unwind across the boundary any less undefined, and a `Drop` impl is
+/// exactly the place a panic appears without anyone having written one - a
+/// future zeroizing or file-closing drop that asserts something is one line
+/// away at any time.
+pub(crate) fn guard_unit<F>(body: F)
+where
+    F: FnOnce(),
+{
+    if catch_unwind(AssertUnwindSafe(body)).is_err() {
+        set_last_error(
+            "internal error: a panic was caught at the ABI boundary; this is a bug in dhow",
+        );
+    }
+}
+
+/// Runs `body`, converting a panic into a negative status.
+///
+/// Used by the entry points that return a count or a capacity as a `c_int`,
+/// where a negative value is already the error channel.
+pub(crate) fn guard_int<F>(body: F) -> std::os::raw::c_int
+where
+    F: FnOnce() -> std::os::raw::c_int,
+{
+    match catch_unwind(AssertUnwindSafe(body)) {
+        Ok(value) => value,
+        Err(_) => {
+            set_last_error(
+                "internal error: a panic was caught at the ABI boundary; this is a bug in dhow",
+            );
+            DhowStatus::Panic as std::os::raw::c_int
+        }
+    }
+}
