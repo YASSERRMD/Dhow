@@ -15,6 +15,157 @@ not believe.
 by rebuilding rather than asserted; the SBOM validates and names every
 dependency; the release manifest verifies with `dhow verify`.
 
+### The build was not reproducible, and the flags were not the reason
+
+The first `--check` run failed, which is what a check is for:
+
+```
+  pass a  c82ca16d47f17e28059fa889819b248beac12c42ac4138b1201d29a474ab6504
+  pass b  daa5a1ac32f171efea11f014f988aaf92cb2e4b45e2fcb4cdf43e152e5a803cc
+```
+
+Diagnosing it rather than guessing: **49 bytes differed**, out of 2,645,634, and
+the first was at offset 2168 - immediately after `/usr/lib/dyld` in the Mach-O
+load commands, which is `LC_UUID` and the code signature that covers it. The
+Rust staticlib was byte-identical in both passes; only the Go link differed.
+
+The cause is that `--remap-path-prefix` and `-trimpath` **do not reach the
+external linker**. cgo passes
+`-L${SRCDIR}/../../../core/target/release` to clang, and macOS `ld64` records
+its inputs' absolute paths in the debug map and derives `LC_UUID` from them.
+
+`-Wl,-no_uuid` made the binary byte-identical and **unrunnable**:
+
+```
+dyld[90487]: missing LC_UUID load command
+```
+
+A reproducible binary that will not start is not a release. Rejected, and the
+check now runs the binary it built so this cannot be traded away by accident.
+
+What worked is a **canonical build path**: the tree is copied to
+`${DHOW_BUILD_ROOT:-/tmp/dhow-build}` and built there, so the paths the linker
+sees are the same on every machine. This is what containerised reproducible
+builds do by building at `/build`, and the reasoning is the same -
+reproducibility is a property of a documented *procedure*, not of the directory
+you happen to be standing in.
+
+```
+  pass a  70acff9cedcbe690416fc082f8cf70ab6696f801133a17549153fe51d63e56fd
+  pass b  70acff9cedcbe690416fc082f8cf70ab6696f801133a17549153fe51d63e56fd
+
+=== REPRODUCIBLE ===
+```
+
+Both passes start from *different* source locations and go through the canonical
+path, which is what makes it a test rather than a tautology.
+
+### And then it found something worse
+
+With the binary finally reproducible, running it failed:
+
+```
+dyld[91448]: Library not loaded: /tmp/dhow-canon/core/target/release/deps/libdhow_ffi.dylib
+```
+
+`dhow-ffi` builds a `cdylib` and a `staticlib` into the same directory and cgo's
+`-ldhow_ffi` prefers the dynamic one, so **the release binary linked the Rust
+core dynamically, by its absolute build path**. It ran on the machine that built
+it and nowhere else.
+
+That is a worse defect than the one being chased - an unreproducible release is
+unauditable, an unlinkable one is unusable - and nothing before this phase would
+have caught it, because every test in the tree runs the binary on the machine
+that built it, with the build directory still present.
+
+Fixed by removing the dynamic library before the Go link, so the archive is the
+only candidate. `otool -L` now shows no `dhow_ffi` reference and the binary runs
+with the build tree deleted.
+
+### The release is signed by dhow
+
+`manifest.bin` is an ordinary dhow manifest over the artifacts directory: the
+same wire format, the same Ed25519 signature over the same canonical bytes,
+checked by the same `dhow verify` an operator already knows.
+
+```
+$ dhow verify -in dist -signer dist/release.pub -dir dist/artifacts
+session   1771fb1841252ff81aa441f4e42a4cfa
+signer    8d:5c:36:b6:c5:94:97:97
+files     5
+bytes     4703652
+result    OK
+```
+
+It is produced by a real `dhow send` whose frames are discarded, so the manifest
+describes a transfer that genuinely happened and the coding parameters in it are
+real. Keeping the frames and shipping those is how a release crosses an air gap,
+which is the whole argument: a courier that signs other people's data and not
+its own releases is making a case it does not believe.
+
+The layout puts the signed things in `artifacts/` and the signature beside it,
+so verification needs no exclusions. The first version signed a flat directory
+and then had to copy files elsewhere to verify around `manifest.bin` and
+`release.pub` naming themselves - which worked and read like a workaround,
+because it was one.
+
+### SBOMs
+
+CycloneDX 1.5, two documents rather than one merged file: the Rust workspace and
+the Go module are separate dependency graphs with separate advisory feeds.
+
+`cargo-cyclonedx` writes one document per crate; `dhow-ffi` depends on the other
+two, so its document already covers the workspace at 55 components, and the
+other two are deleted rather than shipped as three overlapping files a reader
+has to reconcile.
+
+**`sbom-cli.json` legitimately lists zero components.** `go.mod` has no `require`
+block. An SBOM with no components is usually a broken generator, so it is worth
+saying which this is.
+
+All three sources of non-determinism in a generated document are normalised
+away: a fresh UUID serial number, a wall-clock timestamp, and absolute build
+paths. None is a fact about the software and the last would publish a
+developer's home directory.
+
+### Gate output
+
+23 checks, up from 21: the release build with its SBOMs, and the reproducibility
+check. The first skips when the SBOM tools are absent; the second does not,
+because it needs nothing that is not already required to build.
+
+```
+$ ./scripts/gate.sh
+=== GATE SUMMARY ===
+  Passed:  23
+  Failed:  0
+  Skipped: 0
+ALL GATES PASSED
+```
+
+### Deviation: no cross-compilation
+
+The phase pack asks for Linux x86_64 and aarch64 artifacts. Producing those from
+macOS needs a Linux cross toolchain and sysroot for cgo, which is an
+installation rather than a flag - and building them natively on a Linux runner
+is both easier and more trustworthy than cross-compiling.
+
+`make release` builds for the host and the CI job builds for Linux. There is no
+host-specific logic in the script beyond removing `.dylib` and `.so` before
+linking, which handles both. Recorded as **B-10** rather than claimed.
+
+Reproducibility *across machines* is also unproven: two runs on one machine
+agree, and nothing here shows that two machines with the same pinned toolchains
+do. `BUILD-INFO` records the toolchain versions so a disagreement can be
+diagnosed rather than argued about.
+
+### Deviation: 4 atomic commits
+
+The objective, the release tooling, the static-link fix with its documentation,
+and the gate wiring. As in Phases 30 to 32, honest decomposition of a
+tooling-and-documentation phase yields fewer, larger, self-contained changes
+than a wire-format phase does.
+
 ## Phase 32 - Security review
 
 **Objective:** `docs/THREAT-MODEL.md` has carried a requirements checklist since
