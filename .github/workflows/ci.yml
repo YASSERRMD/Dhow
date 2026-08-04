@@ -201,3 +201,30 @@ jobs:
           name: fuzz-artifacts
           path: fuzz/artifacts/
           if-no-files-found: ignore
+
+  release:
+    name: Reproducible Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.5'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install SBOM tools
+        run: |
+          cargo install cargo-cyclonedx --locked
+          go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest
+      # Two builds from two source locations, compared. This is the Linux half
+      # of the claim; the developer gate covers the host it runs on.
+      - run: scripts/release.sh --check
+      - run: scripts/release.sh "$RUNNER_TEMP/dist"
+      # The artifacts are worth keeping even on a green run: a reproducible
+      # build is only useful if someone can compare against what was published.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-x86_64
+          path: ${{ runner.temp }}/dist/

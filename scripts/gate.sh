@@ -155,6 +155,28 @@ run_gate "benchmarks build" \
 run_gate "peak RSS budget" \
     bash -c "'$ROOT/scripts/rss.sh' 16 12 8 >/dev/null"
 
+# --- Release ---
+#
+# The reproducibility check is two full builds and takes about a minute, which
+# is the cost of the only claim about reproducibility worth making: not that the
+# flags look right, but that a second build produced the same bytes. It also
+# runs the binary it built, which is what catches a release that links the Rust
+# core dynamically from a build directory.
+#
+# The SBOM tools are not needed to build or test dhow, so a machine without them
+# skips - counted and named, never reported as a pass.
+
+if command -v cargo-cyclonedx >/dev/null 2>&1 && command -v cyclonedx-gomod >/dev/null 2>&1; then
+    run_gate "release build and SBOM" \
+        bash -c "'$ROOT/scripts/release.sh' \"\$(mktemp -d)/dist\" >/dev/null 2>&1"
+else
+    skip_gate "release build and SBOM" \
+        "cargo-cyclonedx or cyclonedx-gomod is not installed; see docs/RELEASE.md"
+fi
+
+run_gate "reproducible build" \
+    bash -c "'$ROOT/scripts/release.sh' --check >/dev/null 2>&1"
+
 # --- Fuzzing ---
 #
 # Seconds per target, not minutes: a gate that takes an hour is a gate people
