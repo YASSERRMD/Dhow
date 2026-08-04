@@ -164,18 +164,34 @@ overrides.
 the encoder as one `[]byte`, so peak memory is at least the size of the
 archive. `pack.Create` streams and the CLI immediately un-streams it.
 
-**Measured in Phase 31: `dhow send` peaks at 10.4x the dataset size** (16 MiB
-dataset, 166.9 MiB resident; 9.1x at 64 MiB as the fixed overhead amortises).
-For a 1 GiB dataset that is roughly **9 GiB resident**. The components are
-listed in `docs/BENCHMARKS.md`: the archive, the copy out of the builder, the
-ciphertext, and every frame held at once.
+**Measured in Phase 31: 10.4x the dataset size. Phase 38 took it to 7.6x**
+(16 MiB dataset, 121.1 MiB resident; 6.1x at 64 MiB as the fixed overhead
+amortises). For a 1 GiB dataset that is roughly **7 GiB resident**.
 
-`scripts/rss.sh` enforces a 12x budget in the gate, which is a regression check
-and not an endorsement of the number.
+Phase 38 removed two copies without touching the ABI: the `[]byte(builder
+.String())` that un-streamed the archive `pack.Create` had just streamed, and
+the second live copy of the whole frame stream that `encode_to_bytes` held while
+serializing it.
 
-Fixing it means an encoder that takes a reader rather than a slice. That is an
-FFI change - a new streaming handle with feed and poll, replacing the
-`payload`/`payload_len` pair in `dhow_encoder_new` - and a phase of its own.
+`scripts/rss.sh` now enforces a **9x** budget in the gate, tightened from 12x,
+which is a regression check and not an endorsement of the number.
+
+**What is left needs an ABI change and is the whole of the remaining work.** Two
+copies remain and neither can go without one:
+
+1. The archive is Go's and the ciphertext is Rust's, so one of them crosses the
+   boundary as a whole buffer. A feed-and-poll encoder handle - `open`, `feed`,
+   `finish`, replacing the `payload`/`payload_len` pair in `dhow_encoder_new` -
+   lets `pack.Create` stream directly into a Rust-owned buffer that is then
+   encrypted in place. Worth about 2x.
+2. `dhow_encoder_frame` indexes an array of every frame, built up front. The
+   same handle can generate frame `i` on demand from the retained RaptorQ
+   encoders, which `raptorq` supports. Worth about 1.7x.
+
+Both are `DHOW_ABI_VERSION` 5, together, with `scripts/gen_header.sh`,
+`scripts/check_abi.sh`, and the Go-side assertion in
+`cli/internal/ffi/ffi_test.go`. **Tighten `scripts/rss.sh` again when they land**,
+or nothing a gate can see will have changed.
 
 ### B-8: `recv` holds the whole payload in memory (Phase 31)
 
@@ -183,16 +199,23 @@ The same shape as B-6, one copy shallower. The decoder holds the symbols,
 reassembles the ciphertext, decrypts to a plaintext, and `dhow_decoder_finish`
 copies that into a Go buffer that `pack.Extract` then slices.
 
-**Measured: `dhow recv` peaks at 6.4x the dataset size** (16 MiB dataset, 102.2
-MiB resident; 5.9x at 64 MiB). For a 1 GiB dataset that is roughly **6 GiB
+**Measured at 6.4x in Phase 31. Phase 38 took it to 5.4x** (16 MiB dataset,
+85.8 MiB resident; 4.8x at 64 MiB). For a 1 GiB dataset that is roughly **5 GiB
 resident**, on the machine least likely to have it - the receiver is
 deliberately off every network and is rarely the newest one in the building.
 
-Fixing it needs both a streaming `finish` across the ABI and a `pack.Extract`
-that reads from a reader rather than a slice. The second is the easier half and
-does not need an ABI change.
+Phase 38 removed one copy: `dhow_decoder_finish` owns the ciphertext and nothing
+reads it afterwards, so it is now decrypted in place rather than into a second
+buffer the size of the whole payload.
 
-`scripts/rss.sh` enforces an 8x budget.
+What remains is the plaintext being copied across the ABI into a Go buffer that
+`pack.Extract` then slices. Fixing it needs a streaming `finish` - the same ABI
+5 change as B-6 - and a `pack.Extract` that reads from a reader. The second is
+the easier half and does not need an ABI change, but on its own it saves
+nothing: the whole plaintext is already in Go's buffer by the time Extract sees
+it.
+
+`scripts/rss.sh` enforces a **6x** budget, tightened from 8x.
 
 ### B-9: four testable security claims are untested (Phase 32)
 
