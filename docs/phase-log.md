@@ -11,6 +11,82 @@ phases, and the result is tagged.
 zero unresolved markers, checked by a script rather than by a grep somebody ran
 once; a tag pushed.
 
+### The marker triage needed a script, not a grep
+
+The gate the phase pack asks for is "zero TODOs without a `docs/BACKLOG.md`
+entry". A plain grep cannot enforce it. This tree contains **fourteen strings
+that match `TODO` or `XXX` and are not markers**:
+
+```
+core/dhow-codec/src/frame_test.rs:128:    bytes[0..4].copy_from_slice(b"XXXX");
+scripts/chaos.sh:34:WORK="$(mktemp -d -t dhow-chaos-XXXXXX)"
+```
+
+Invalid magic in parser rejection tests, and the `mktemp` template every script
+uses. A gate that reports fourteen findings on a clean tree is a gate people
+learn to ignore, and the fifteenth - a real one - arrives unnoticed.
+
+`scripts/triage.sh` writes the exclusions down with the reason each is not a
+marker, rather than being a `| grep -v` appended until the output went quiet. It
+scans source and not Markdown, because a marker in a document is a note to a
+reader and a marker in code is deferred work with no owner. Shown to bite by
+adding a `TODO` to `pack.go`.
+
+**Genuine unresolved markers in the tree: zero.**
+
+### The clean-clone gate
+
+Not the working tree. A fresh `git clone` into a directory nothing had touched,
+with no `core/target`, no built binary, no fuzz corpus, and no key files:
+
+```
+$ git clone ... && cd dhow && ./scripts/gate.sh
+
+=== GATE SUMMARY ===
+  Passed:  26
+  Failed:  0
+  Skipped: 0
+ALL GATES PASSED
+```
+
+Twenty-six checks, none skipped, from nothing. That is the number that matters,
+because a gate green in a working tree that has accumulated state for
+thirty-five phases can be green for reasons nobody arranged.
+
+### The tag is v1.0.0-rc.1, not v1.0.0
+
+**This is a deliberate deviation from the phase pack, which says to tag
+v1.0.0.**
+
+Dhow's stated purpose is moving a dataset across an air gap by showing frames on
+a screen and reading them with a camera. **The camera half does not exist.**
+Every layer above the optical one is exercised end to end and the tool cannot do
+the thing it is for. Calling that 1.0.0 would be putting a number on a claim the
+software does not support, and this project has spent thirty-five phases
+declining to do smaller versions of exactly that - the unsigned manifest that
+`verify` checked, the threat model's Status column, the conformance suite that
+passed on checks matching nothing.
+
+Second: **B-1 is open.** Its own entry says "treat as high until reproduced".
+2,960 rounds have not reproduced it, and absence at that count bounds how common
+it is rather than whether it exists. A data courier's 1.0.0 should not carry an
+open possible-correctness defect.
+
+A release candidate is exactly the artifact for software that is complete in
+every respect except the ones written down. Both are written down, in
+[B-11](BACKLOG.md), with what has to be true before the number changes.
+
+Everything else the pack asks of a 1.0.0 is done: the format suite is frozen at
+2.0 with a compatibility policy, the ABI is stable at 4, the build is
+reproducible and the release is signed by dhow itself, the documentation is
+complete and executed by the gate, and the threat model traces every control to
+a test or records that nothing enforces it.
+
+### Deviation: 3 atomic commits
+
+The objective, the triage script with its gate wiring, and the log. The
+clean-clone run produced evidence rather than code.
+
 ## Phase 35 - Documentation completion
 
 **Objective:** the documentation this project has is good where it exists and
