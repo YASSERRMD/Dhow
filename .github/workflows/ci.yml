@@ -165,7 +165,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - run: python3 scripts/gen_vectors.py
@@ -184,7 +184,7 @@ jobs:
           # docs/FUZZING.md for why this is a second toolchain rather than a
           # stable-only fuzzer.
           toolchain: nightly-2025-12-14
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Install cargo-fuzz
@@ -211,7 +211,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.25.5'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       # Checks a built binary against proto/, not the vectors against the
@@ -227,7 +227,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.25.5'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Install SBOM tools
