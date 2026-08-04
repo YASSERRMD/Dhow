@@ -38,6 +38,8 @@ tool you can test end to end but not yet run across a real air gap.
 - [Fuzzing](docs/FUZZING.md) — the toolchain decision, the targets, the corpus
 - [Benchmarks and the Memory Budget](docs/BENCHMARKS.md) — baselines, and what
   a 1 GiB transfer costs today
+- [Building and Verifying a Release](docs/RELEASE.md) — reproducible builds,
+  SBOMs, and how a download is checked
 - [Phase Log](docs/phase-log.md)
 
 Wire formats live in [proto/](proto/).

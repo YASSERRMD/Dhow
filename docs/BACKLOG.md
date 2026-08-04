@@ -179,6 +179,23 @@ unit test. The other four are each a source-level scan over a small surface:
 All four are cheap and none is done. They belong together as one lint pass over
 the source, wired into `scripts/gate.sh`.
 
+### B-10: release builds are host-only (Phase 33)
+
+`scripts/release.sh` builds for the machine it runs on. The phase pack asks for
+Linux x86_64 and aarch64 artifacts, which from macOS needs a Linux cross
+toolchain and sysroot for cgo - an installation rather than a flag.
+
+Building them natively on a Linux runner is both easier and more trustworthy
+than cross-compiling, so the work is a CI job that runs `scripts/release.sh` on
+each target and publishes the artifacts, not a change to the script. There is no
+host-specific logic in it beyond removing `.dylib` and `.so` before linking,
+which already handles both.
+
+Reproducibility *across machines* is also unproven. Two runs on one machine
+agree; two machines with the same pinned toolchains should agree and nothing
+demonstrates it. `BUILD-INFO` records the toolchain versions so a disagreement
+can be diagnosed rather than argued about.
+
 ## Closed
 
 ### B-4: no fuzzing targets (Phase 2, closed Phase 29)

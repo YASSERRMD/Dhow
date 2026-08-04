@@ -54,6 +54,13 @@ transfer currently costs.
 A change to the data path should come with a before-and-after from
 `--save-baseline`, not an assertion that it is faster.
 
+## Releases
+
+`make release` builds a reproducible release with SBOMs and a dhow-signed
+manifest; `make release-check` builds twice and compares.
+[docs/RELEASE.md](docs/RELEASE.md) explains why the build happens at a fixed
+path, what to do when the check fails, and what the release does not yet cover.
+
 ## Soaking
 
 `scripts/chaos.sh` runs randomised fault-injection rounds against the shipped
