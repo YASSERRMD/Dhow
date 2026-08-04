@@ -83,6 +83,15 @@ run_gate "wire-format spec consistency" \
 run_gate "golden vector conformance" \
     python3 "$ROOT/scripts/conformance_test.py"
 
+# The two checks above compare generated files against the documents that
+# describe them, and would not notice if the *implementation* had drifted from
+# both. This one builds dhow, runs a transfer, and reads the bytes it produced
+# at the offsets proto/ declares. Demonstrated in Phase 34: changing
+# MANIFEST_VERSION to 3 left all 37 manifest unit tests passing and failed here.
+
+run_gate "CLI conformance against proto/" \
+    python3 "$ROOT/scripts/conformance_cli.py"
+
 # --- Go gates ---
 #
 # The Go package links against the Rust staticlib, so the core must be built

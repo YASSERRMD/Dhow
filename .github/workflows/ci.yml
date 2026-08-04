@@ -202,6 +202,22 @@ jobs:
           path: fuzz/artifacts/
           if-no-files-found: ignore
 
+  conformance-cli:
+    name: CLI Conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.5'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Checks a built binary against proto/, not the vectors against the
+      # document that generated them. See proto/README.md.
+      - run: python3 scripts/conformance_cli.py
+
   release:
     name: Reproducible Release
     runs-on: ubuntu-latest
