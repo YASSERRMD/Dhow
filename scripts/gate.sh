@@ -173,6 +173,16 @@ run_gate "benchmarks build" \
 run_gate "peak RSS budget" \
     bash -c "'$ROOT/scripts/rss.sh' 16 12 8 >/dev/null"
 
+# --- Marker triage ---
+#
+# "Zero TODOs without a backlog entry" is a release gate that a plain grep
+# cannot enforce: this tree has fourteen strings matching TODO that are not
+# markers, and a gate reporting fourteen findings on a clean tree is one people
+# learn to ignore. scripts/triage.sh writes the exclusions down with reasons.
+
+run_gate "marker triage" \
+    bash -c "'$ROOT/scripts/triage.sh' >/dev/null"
+
 # --- Release ---
 #
 # The reproducibility check is two full builds and takes about a minute, which

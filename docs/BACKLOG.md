@@ -196,6 +196,27 @@ agree; two machines with the same pinned toolchains should agree and nothing
 demonstrates it. `BUILD-INFO` records the toolchain versions so a disagreement
 can be diagnosed rather than argued about.
 
+### B-11: v1.0.0 is blocked on two things (Phase 36)
+
+Phase 36 tagged **v1.0.0-rc.1** rather than v1.0.0. Two things must be true
+before the version number stops being a claim the software does not support:
+
+1. **B-3 — the camera path.** Dhow's stated purpose is moving a dataset across
+   an air gap by showing frames on a screen and reading them with a camera. The
+   camera half does not exist. Everything above the optical layer is exercised
+   end to end, and a 1.0.0 would still be a tool that cannot do the thing it is
+   for. This is the blocker.
+
+2. **B-1 — the unreproduced chaos failure.** Its own entry says "treat as high
+   until reproduced". 2,960 rounds have not reproduced it and absence at that
+   count bounds how common it is, not whether it exists. Shipping a 1.0.0 of a
+   data courier with an open possible-correctness defect would be putting a
+   number on something that has not been settled.
+
+Neither is a reason to withhold a release candidate. A release candidate is
+exactly the artifact for software that is complete in every respect except the
+ones written down.
+
 ## Closed
 
 ### B-4: no fuzzing targets (Phase 2, closed Phase 29)
