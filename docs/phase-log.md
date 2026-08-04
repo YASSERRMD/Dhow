@@ -1,5 +1,16 @@
 # Phase Log
 
+## Phase 36 - Release candidate
+
+**Objective:** the last release phase. Every TODO and FIXME in the tree is
+resolved or has a backlog entry, the gate runs green from a clean clone rather
+than from a working tree that has been accumulating state for thirty-five
+phases, and the result is tagged.
+
+**Gates:** `git clone && ./scripts/gate.sh` green on a tree nothing has touched;
+zero unresolved markers, checked by a script rather than by a grep somebody ran
+once; a tag pushed.
+
 ## Phase 35 - Documentation completion
 
 **Objective:** the documentation this project has is good where it exists and
