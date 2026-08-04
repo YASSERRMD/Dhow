@@ -98,29 +98,34 @@ pub(crate) fn fail(status: DhowStatus, message: impl Into<String>) -> DhowStatus
 /// behalf and never retains the pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dhow_last_error_message(buf: *mut c_char, len: usize) -> c_int {
-    LAST_ERROR.with(|slot| {
-        let message = slot.borrow();
-        let bytes = message.as_bytes();
-        let needed = bytes.len() + 1;
+    // Guarded because `RefCell::borrow` panics if the slot is already borrowed
+    // mutably, which a re-entrant caller - a signal handler, an FFI callback -
+    // can arrange from outside this library.
+    crate::guard::guard_int(|| {
+        LAST_ERROR.with(|slot| {
+            let message = slot.borrow();
+            let bytes = message.as_bytes();
+            let needed = bytes.len() + 1;
 
-        if buf.is_null() {
-            return needed as c_int;
-        }
+            if buf.is_null() {
+                return needed as c_int;
+            }
 
-        if len < needed {
-            return DhowStatus::BufferTooSmall as c_int;
-        }
+            if len < needed {
+                return DhowStatus::BufferTooSmall as c_int;
+            }
 
-        // SAFETY: `buf` is non-null and the caller promises `len` writable
-        // bytes; `needed <= len` was just checked, and the source and
-        // destination cannot overlap because the source is thread-local
-        // storage owned by this library.
-        unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, bytes.len());
-            *buf.add(bytes.len()) = 0;
-        }
+            // SAFETY: `buf` is non-null and the caller promises `len` writable
+            // bytes; `needed <= len` was just checked, and the source and
+            // destination cannot overlap because the source is thread-local
+            // storage owned by this library.
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, bytes.len());
+                *buf.add(bytes.len()) = 0;
+            }
 
-        needed as c_int
+            needed as c_int
+        })
     })
 }
 

@@ -31,6 +31,25 @@ DHOW="$WORK/dhow"
 pass() { echo "  PASS  $*"; }
 fail() { echo "  FAIL  $*" >&2; exit 1; }
 
+# flip_byte changes one byte of a file to a value it did not already hold.
+#
+# Every tamper check below used `printf '\xa5' | dd ... seek=N`, which *sets* a
+# byte rather than flipping it. When the byte already held that value the
+# "tampered" file was byte-identical to the original, the transfer correctly
+# succeeded, and the harness reported a failure. The manifest carries a random
+# session id, salt, and nonce, so the odds are one in 256 per offset - about
+# three per cent per run across seven offsets, which is exactly often enough to
+# look like flakiness and be dismissed. Found by the Phase 39 gate run.
+flip_byte() {
+    local file="$1" offset="$2"
+    local current
+    current=$(dd if="$file" bs=1 skip="$offset" count=1 2>/dev/null | od -An -tu1 | tr -d ' ')
+    # shellcheck disable=SC2059
+    printf "$(printf '\\x%02x' $(( (current + 1) % 256 )))" \
+        | dd of="$file" bs=1 seek="$offset" conv=notrunc status=none
+}
+
+
 echo "=== dhow loopback harness ==="
 echo "dataset ${SIZE_MB} MiB, frame loss ${LOSS_PCT}%"
 echo
@@ -163,7 +182,7 @@ pass "recovered from a contiguous outage of ${RUN} frames"
 CORRUPT="$WORK/corrupt"
 cp -R "$WORK/frames" "$CORRUPT"
 for f in $(find "$CORRUPT" -name 'frame-*.bin' | head -5); do
-    printf '\xff' | dd of="$f" bs=1 seek=50 conv=notrunc status=none
+    flip_byte "$f" 50
 done
 "$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$CORRUPT" -out "$WORK/from-corrupt" >/dev/null \
     || fail "transfer did not survive corrupted frames"
@@ -213,7 +232,7 @@ set -e
 
 # Offset 40 is inside the index's journal digest: the field that would have to
 # be rewritten to make a doctored journal look like the expected one.
-printf '\xff' | dd of="$TAMPER/resume.dhrs" bs=1 seek=40 conv=notrunc status=none
+flip_byte "$TAMPER/resume.dhrs" 40
 set +e
 "$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$WORK/frames" -out "$WORK/tampered" \
     -state "$TAMPER" >/dev/null 2>&1
@@ -226,7 +245,7 @@ set +e
 "$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$WORK/frames" -out "$WORK/tampered2" \
     -state "$JOURNAL_TAMPER" -stop-after "$FIRST_STOP" >/dev/null 2>&1
 set -e
-printf '\xff' | dd of="$JOURNAL_TAMPER/journal.bin" bs=1 seek=60 conv=notrunc status=none
+flip_byte "$JOURNAL_TAMPER/journal.bin" 60
 set +e
 "$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" -in "$WORK/frames" -out "$WORK/tampered2" \
     -state "$JOURNAL_TAMPER" >/dev/null 2>&1
@@ -270,7 +289,7 @@ for OFFSET in 8 40 70 110 130 200 $((MANIFEST_LEN - 1)); do
     TAMPERED="$WORK/tampered-manifest"
     rm -rf "$TAMPERED"
     cp -R "$WORK/frames" "$TAMPERED"
-    printf '\xa5' | dd of="$TAMPERED/manifest.bin" bs=1 seek="$OFFSET" conv=notrunc status=none
+    flip_byte "$TAMPERED/manifest.bin" "$OFFSET"
     set +e
     "$DHOW" recv -key "$WORK/operator.key" -signer "$WORK/sender.pub" \
         -in "$TAMPERED" -out "$WORK/from-tampered" >/dev/null 2>&1
@@ -300,7 +319,7 @@ pass "verify rejects a dataset whose manifest was not signed by the expected ide
 
 # One flipped byte in a multi-megabyte file, with every name, count, and size
 # left correct. This is the corruption a file count cannot see.
-printf '\xff' | dd of="$WORK/clean/bin/random.bin" bs=1 seek=4096 conv=notrunc status=none
+flip_byte "$WORK/clean/bin/random.bin" 4096
 set +e
 "$DHOW" verify -in "$WORK/frames" -signer "$WORK/sender.pub" -dir "$WORK/clean" -json > "$WORK/verify.json" 2>/dev/null
 VERIFY_EXIT=$?

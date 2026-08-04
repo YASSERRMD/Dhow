@@ -60,6 +60,38 @@ skip = [
     { crate = "syn@2", reason = "build-time proc-macro dependency, not linked into release artifacts" },
 ]
 
+# Crates that open sockets.
+#
+# Section 3 of the master spec says "any dependency that opens a socket in the
+# data path is a build failure" and CI enforces it. It did not: cargo deny
+# checks licenses, advisories, and duplicate versions, and nothing looked at
+# what the dependencies do. This is that enforcement, added in Phase 39.
+#
+# It lives here rather than in a source scan because cargo deny walks the
+# *resolved* graph. A scan of Cargo.toml would see only what this workspace
+# names directly, and the way a networking crate actually arrives is three
+# levels down inside something that added a feature.
+#
+# The list is the common transports and the async runtimes that carry them,
+# rather than an attempt at completeness, which is not achievable. It is a
+# tripwire on the paths a dependency actually takes to reach a socket.
+# scripts/security_lint.py checks this list still names each of them, so the
+# two cannot drift apart.
+deny = [
+    { crate = "tokio", reason = "async runtime; the usual carrier for a socket" },
+    { crate = "hyper", reason = "HTTP" },
+    { crate = "reqwest", reason = "HTTP client" },
+    { crate = "ureq", reason = "HTTP client" },
+    { crate = "curl", reason = "HTTP client" },
+    { crate = "mio", reason = "the epoll/kqueue layer under most Rust networking" },
+    { crate = "socket2", reason = "raw socket configuration" },
+    { crate = "tungstenite", reason = "WebSockets" },
+    { crate = "quinn", reason = "QUIC" },
+    { crate = "rustls", reason = "TLS; nothing here should be speaking TLS" },
+    { crate = "native-tls", reason = "TLS" },
+    { crate = "openssl", reason = "TLS, and a second cryptographic stack" },
+]
+
 [advisories]
 # Deny known security vulnerabilities.
 ignore = [

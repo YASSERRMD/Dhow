@@ -231,7 +231,7 @@ fn test_transfer_secrets_are_unique_across_transfers() {
     let mut salts = std::collections::HashSet::new();
     let mut nonces = std::collections::HashSet::new();
     for _ in 0..256 {
-        let s = TransferSecrets::generate().unwrap();
+        let s = TransferParameters::generate().unwrap();
         assert!(salts.insert(*s.salt.as_bytes()), "salt repeated");
         assert!(nonces.insert(*s.nonce.as_bytes()), "nonce repeated");
     }

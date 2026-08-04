@@ -14,7 +14,7 @@
 //! size, then call again with a buffer of at least that size.
 
 use crate::error::{DhowStatus, clear_last_error, fail};
-use crate::guard::{guard, guard_ptr};
+use crate::guard::{guard, guard_int, guard_ptr, guard_unit};
 use dhow_codec::blake3::{Blake3Hasher, blake3_digest};
 use dhow_codec::manifest::{FileEntry, Manifest, ManifestHeader, validate_name};
 use dhow_codec::pipeline::{Pipeline, PipelineDecoder};
@@ -228,12 +228,14 @@ pub unsafe extern "C" fn dhow_key_save(key: *const DhowKey, path: *const c_char)
 /// `key` must be null or a handle from this library that has not been freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dhow_key_free(key: *mut DhowKey) {
-    if key.is_null() {
-        return;
-    }
-    // SAFETY: the caller guarantees `key` came from `Box::into_raw` here and
-    // has not already been freed. Dropping zeroizes the key material.
-    drop(unsafe { Box::from_raw(key) });
+    guard_unit(|| {
+        if key.is_null() {
+            return;
+        }
+        // SAFETY: the caller guarantees `key` came from `Box::into_raw` here and
+        // has not already been freed. Dropping zeroizes the key material.
+        drop(unsafe { Box::from_raw(key) });
+    });
 }
 
 // --- Encoder ---
@@ -380,12 +382,14 @@ pub unsafe extern "C" fn dhow_encoder_params(
 /// `encoder` must be null or a live handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dhow_encoder_frame_count(encoder: *const DhowEncoder) -> c_int {
-    if encoder.is_null() {
-        return DhowStatus::NullArgument as c_int;
-    }
-    // SAFETY: `encoder` is non-null and the caller guarantees it is live.
-    let encoder = unsafe { &*encoder };
-    encoder.frames.len() as c_int
+    guard_int(|| {
+        if encoder.is_null() {
+            return DhowStatus::NullArgument as c_int;
+        }
+        // SAFETY: `encoder` is non-null and the caller guarantees it is live.
+        let encoder = unsafe { &*encoder };
+        encoder.frames.len() as c_int
+    })
 }
 
 /// Copies frame `index` into `buf`.
@@ -436,12 +440,14 @@ pub unsafe extern "C" fn dhow_encoder_frame(
 /// freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dhow_encoder_free(encoder: *mut DhowEncoder) {
-    if encoder.is_null() {
-        return;
-    }
-    // SAFETY: the caller guarantees `encoder` came from `Box::into_raw` here
-    // and has not already been freed.
-    drop(unsafe { Box::from_raw(encoder) });
+    guard_unit(|| {
+        if encoder.is_null() {
+            return;
+        }
+        // SAFETY: the caller guarantees `encoder` came from `Box::into_raw` here
+        // and has not already been freed.
+        drop(unsafe { Box::from_raw(encoder) });
+    });
 }
 
 // --- Decoder ---
@@ -544,12 +550,14 @@ pub unsafe extern "C" fn dhow_decoder_accept(
 /// `decoder` must be null or a live handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dhow_decoder_is_complete(decoder: *const DhowDecoder) -> c_int {
-    if decoder.is_null() {
-        return DhowStatus::NullArgument as c_int;
-    }
-    // SAFETY: `decoder` is non-null and the caller guarantees it is live.
-    let decoder = unsafe { &*decoder };
-    i32::from(decoder.inner.is_complete())
+    guard_int(|| {
+        if decoder.is_null() {
+            return DhowStatus::NullArgument as c_int;
+        }
+        // SAFETY: `decoder` is non-null and the caller guarantees it is live.
+        let decoder = unsafe { &*decoder };
+        i32::from(decoder.inner.is_complete())
+    })
 }
 
 /// Returns how many blocks have decoded, or a negative status.
@@ -559,12 +567,14 @@ pub unsafe extern "C" fn dhow_decoder_is_complete(decoder: *const DhowDecoder) -
 /// `decoder` must be null or a live handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dhow_decoder_blocks_complete(decoder: *const DhowDecoder) -> c_int {
-    if decoder.is_null() {
-        return DhowStatus::NullArgument as c_int;
-    }
-    // SAFETY: `decoder` is non-null and the caller guarantees it is live.
-    let decoder = unsafe { &*decoder };
-    decoder.inner.blocks_complete() as c_int
+    guard_int(|| {
+        if decoder.is_null() {
+            return DhowStatus::NullArgument as c_int;
+        }
+        // SAFETY: `decoder` is non-null and the caller guarantees it is live.
+        let decoder = unsafe { &*decoder };
+        decoder.inner.blocks_complete() as c_int
+    })
 }
 
 /// Reassembles, verifies, and decrypts the payload.
@@ -797,12 +807,14 @@ pub unsafe extern "C" fn dhow_decoder_resume_verify(
 /// freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dhow_decoder_free(decoder: *mut DhowDecoder) {
-    if decoder.is_null() {
-        return;
-    }
-    // SAFETY: the caller guarantees `decoder` came from `Box::into_raw` here
-    // and has not already been freed.
-    drop(unsafe { Box::from_raw(decoder) });
+    guard_unit(|| {
+        if decoder.is_null() {
+            return;
+        }
+        // SAFETY: the caller guarantees `decoder` came from `Box::into_raw` here
+        // and has not already been freed.
+        drop(unsafe { Box::from_raw(decoder) });
+    });
 }
 
 // --- Digests ---
@@ -932,12 +944,14 @@ pub unsafe extern "C" fn dhow_hasher_finish(hasher: *const DhowHasher, out: *mut
 /// freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dhow_hasher_free(hasher: *mut DhowHasher) {
-    if hasher.is_null() {
-        return;
-    }
-    // SAFETY: the caller guarantees `hasher` came from `Box::into_raw` here
-    // and has not already been freed.
-    drop(unsafe { Box::from_raw(hasher) });
+    guard_unit(|| {
+        if hasher.is_null() {
+            return;
+        }
+        // SAFETY: the caller guarantees `hasher` came from `Box::into_raw` here
+        // and has not already been freed.
+        drop(unsafe { Box::from_raw(hasher) });
+    });
 }
 
 // --- QR encoding ---
@@ -948,13 +962,15 @@ pub unsafe extern "C" fn dhow_hasher_free(hasher: *mut DhowHasher) {
 /// on invalid input.
 #[unsafe(no_mangle)]
 pub extern "C" fn dhow_qr_capacity(version: u8, ecc: c_char) -> c_int {
-    let Some(level) = Ecc::from_letter(ecc as u8 as char) else {
-        return DhowStatus::InvalidArgument as c_int;
-    };
-    match qr_capacity(version, level) {
-        Ok(n) => n as c_int,
-        Err(_) => DhowStatus::InvalidArgument as c_int,
-    }
+    guard_int(|| {
+        let Some(level) = Ecc::from_letter(ecc as u8 as char) else {
+            return DhowStatus::InvalidArgument as c_int;
+        };
+        match qr_capacity(version, level) {
+            Ok(n) => n as c_int,
+            Err(_) => DhowStatus::InvalidArgument as c_int,
+        }
+    })
 }
 
 /// Reports the largest codec symbol size that still fits one QR code.
@@ -965,14 +981,16 @@ pub extern "C" fn dhow_qr_capacity(version: u8, ecc: c_char) -> c_int {
 /// discovering at render time that frames do not fit.
 #[unsafe(no_mangle)]
 pub extern "C" fn dhow_qr_max_symbol_size(version: u8, ecc: c_char) -> c_int {
-    let Some(level) = Ecc::from_letter(ecc as u8 as char) else {
-        return DhowStatus::InvalidArgument as c_int;
-    };
-    match qr_max_symbol_size(version, level) {
-        Ok(Some(n)) => n as c_int,
-        Ok(None) => 0,
-        Err(_) => DhowStatus::InvalidArgument as c_int,
-    }
+    guard_int(|| {
+        let Some(level) = Ecc::from_letter(ecc as u8 as char) else {
+            return DhowStatus::InvalidArgument as c_int;
+        };
+        match qr_max_symbol_size(version, level) {
+            Ok(Some(n)) => n as c_int,
+            Ok(None) => 0,
+            Err(_) => DhowStatus::InvalidArgument as c_int,
+        }
+    })
 }
 
 /// Encodes one frame as a QR code and writes its module grid.
@@ -1163,12 +1181,14 @@ pub unsafe extern "C" fn dhow_identity_public(
 /// freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dhow_identity_free(identity: *mut DhowIdentity) {
-    if identity.is_null() {
-        return;
-    }
-    // SAFETY: the caller guarantees `identity` came from `Box::into_raw` here
-    // and has not already been freed. Dropping zeroizes the secret half.
-    drop(unsafe { Box::from_raw(identity) });
+    guard_unit(|| {
+        if identity.is_null() {
+            return;
+        }
+        // SAFETY: the caller guarantees `identity` came from `Box::into_raw` here
+        // and has not already been freed. Dropping zeroizes the secret half.
+        drop(unsafe { Box::from_raw(identity) });
+    });
 }
 
 /// Loads a public identity from a 32-byte public key file.
@@ -1291,12 +1311,14 @@ pub unsafe extern "C" fn dhow_public_fingerprint(
 /// `public` must be null or a handle from this library that has not been freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dhow_public_free(public: *mut DhowPublicIdentity) {
-    if public.is_null() {
-        return;
-    }
-    // SAFETY: the caller guarantees `public` came from `Box::into_raw` here and
-    // has not already been freed.
-    drop(unsafe { Box::from_raw(public) });
+    guard_unit(|| {
+        if public.is_null() {
+            return;
+        }
+        // SAFETY: the caller guarantees `public` came from `Box::into_raw` here and
+        // has not already been freed.
+        drop(unsafe { Box::from_raw(public) });
+    });
 }
 
 // --- Manifests ---
@@ -1832,10 +1854,12 @@ pub unsafe extern "C" fn dhow_manifest_file_executable(
 /// freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dhow_manifest_free(manifest: *mut DhowManifest) {
-    if manifest.is_null() {
-        return;
-    }
-    // SAFETY: the caller guarantees `manifest` came from `Box::into_raw` here
-    // and has not already been freed.
-    drop(unsafe { Box::from_raw(manifest) });
+    guard_unit(|| {
+        if manifest.is_null() {
+            return;
+        }
+        // SAFETY: the caller guarantees `manifest` came from `Box::into_raw` here
+        // and has not already been freed.
+        drop(unsafe { Box::from_raw(manifest) });
+    });
 }

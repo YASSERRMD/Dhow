@@ -27,6 +27,24 @@
 # number; a soak run is `scripts/chaos.sh 500`.
 set -euo pipefail
 
+# flip_byte changes one byte of a file to a value it did not already hold.
+#
+# Every tamper check below used `printf '\xa5' | dd ... seek=N`, which *sets* a
+# byte rather than flipping it. When the byte already held that value the
+# "tampered" file was byte-identical to the original, the transfer correctly
+# succeeded, and the harness reported a failure. The manifest carries a random
+# session id, salt, and nonce, so the odds are one in 256 per offset - about
+# three per cent per run across seven offsets, which is exactly often enough to
+# look like flakiness and be dismissed. Found by the Phase 39 gate run.
+flip_byte() {
+    local file="$1" offset="$2"
+    local current
+    current=$(dd if="$file" bs=1 skip="$offset" count=1 2>/dev/null | od -An -tu1 | tr -d ' ')
+    # shellcheck disable=SC2059
+    printf "$(printf '\\x%02x' $(( (current + 1) % 256 )))" \
+        | dd of="$file" bs=1 seek="$offset" conv=notrunc status=none
+}
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ROUNDS="${1:-25}"
 SEED="${2:-$(date +%s)}"
@@ -219,7 +237,7 @@ for round in $(seq 1 "$ROUNDS"); do
         VICTIM="${SURVIVORS[$RAND_VALUE]}"
         [ -f "$VICTIM" ] || continue
         rand 40; OFFSET=$RAND_VALUE
-        printf '\xa5' | dd of="$VICTIM" bs=1 seek="$OFFSET" conv=notrunc status=none
+        flip_byte "$VICTIM" "$OFFSET"
     done
 
     # --- Receive, sometimes killed partway ---

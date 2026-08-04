@@ -64,6 +64,17 @@ run_gate "cargo audit" \
 run_gate "cargo deny" \
     bash -c "cd '$CORE_DIR' && cargo deny check"
 
+# --- Security lint ---
+#
+# The Phase 32 traceability table found six threat-model controls that nothing
+# enforced. Four of them are a scan over a small surface and this is that scan:
+# no secret-dependent branching in dhow-crypt, no raw key bytes across the C
+# ABI, an unwind guard at every FFI entry point, and a networking denylist.
+# Added in Phase 39, where it immediately found fifteen unguarded entry points.
+
+run_gate "security lint" \
+    python3 "$ROOT/scripts/security_lint.py"
+
 # --- ABI gates ---
 
 run_gate "ABI drift" \
