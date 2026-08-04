@@ -217,34 +217,6 @@ it.
 
 `scripts/rss.sh` enforces a **6x** budget, tightened from 8x.
 
-### B-9: four testable security claims are untested (Phase 32)
-
-The Phase 32 traceability table in `docs/THREAT-MODEL.md` found six controls
-that nothing enforces. Two of them are probably not worth testing - observing a
-zeroized buffer means reading freed memory, and photographing a screen is not a
-unit test. The other four are each a source-level scan over a small surface:
-
-1. **No secret-dependent branching in `dhow-crypt`** (row 9). Secrets are
-   compared with `subtle::ConstantTimeEq` today. A future comparison written
-   with `==` would pass every gate. A scan for `==` and `!=` against the secret
-   types would catch it.
-2. **No raw key bytes across the ABI** (row 14). No `extern "C"` signature takes
-   or returns key material, which is the property the handle design exists for.
-   `scripts/check_abi.sh` compares the three views of the ABI and does not check
-   this. A scan of the generated header for a pointer argument named like a key
-   would.
-3. **Every FFI entry point catches unwinds** (row 45). Every body in `handle.rs`
-   is wrapped in `guard` or `guard_ptr`; an unwrapped one would be undefined
-   behaviour across the boundary and a release blocker. A scan for an
-   `extern "C" fn` whose body does not open with `guard` would catch it.
-4. **No networking dependency** (row 46). The dependency tree contains none,
-   verified by reading it. `cargo deny` checks licenses, advisories, and
-   duplicate versions - not sockets. A `[bans] deny` list naming the common
-   networking crates would.
-
-All four are cheap and none is done. They belong together as one lint pass over
-the source, wired into `scripts/gate.sh`.
-
 ### B-10: release builds are host-only (Phase 33)
 
 `scripts/release.sh` builds for the machine it runs on. The phase pack asks for
@@ -299,6 +271,39 @@ exactly the artifact for software that is complete in every respect except the
 ones written down.
 
 ## Closed
+
+### B-9: four testable security claims were untested (Phase 32, closed Phase 39)
+
+The Phase 32 traceability table found six controls that nothing enforced. Two
+are not worth testing - observing a zeroized buffer means reading freed memory,
+and photographing a screen is not a unit test - and the other four each needed a
+scan over a small surface.
+
+Closed by Phase 39: `scripts/security_lint.py` and a `[bans] deny` list in
+`deny.toml`, both in the gate, each shown to bite by breaking the thing it
+checks.
+
+The scans found more than they were written to confirm:
+
+- **Fifteen FFI entry points had no unwind guard.** Seven `*_free` functions,
+  whose `Drop` impls run unguarded and where a future zeroizing or file-closing
+  drop is one line away; five count-and-capacity accessors; and
+  `dhow_last_error_message`, whose `RefCell::borrow` panics on re-entry from a
+  signal handler or an FFI callback. All fixed, with `guard_unit` and
+  `guard_int` added alongside the existing two. Three inert accessors are
+  excluded by name, and the exclusion is conditional on the body staying inert
+  rather than being a bare allowlist.
+- **A type called `TransferSecrets` whose doc comment said neither field is
+  secret.** The same naming defect the Phase 32 audit found when the threat
+  model called a symmetric key an Ed25519 identity key. Renamed to
+  `TransferParameters`; the old name stays in the lint's list so it cannot come
+  back attached to something that is secret.
+- **The first version of the secret-comparison scan did not work.** Replacing
+  `OperatorKey`'s `ct_eq` with `==` produced no finding, because the scan looked
+  for a secret type named on the same line and the realistic comparison is
+  `self.bytes == other.bytes` inside the type's own `impl`. The scan now tracks
+  which impl block it is in. Found by trying to break it, which is the whole
+  reason the demonstration is required.
 
 ### B-4: no fuzzing targets (Phase 2, closed Phase 29)
 

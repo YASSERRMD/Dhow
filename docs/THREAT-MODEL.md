@@ -197,7 +197,7 @@ an empty column, because it was relied upon.
 | 11 | Key files are written 0600 | Enforced | `key_test::test_saved_secret_key_is_owner_only`, `test_saving_over_a_permissive_file_tightens_permissions` |
 | 12 | A group- or world-readable key is refused | Enforced | `key_test::test_loading_rejects_group_or_world_readable_key`; end to end by `scripts/drill.sh` |
 | 13 | The two key kinds are not interchangeable | Enforced | `key_test::test_loading_rejects_wrong_key_kind`, `cli_test::TestSendRefusesAnOperatorKeyAsAnIdentity` |
-| 14 | Key material never crosses the FFI as raw bytes | **Review** | No `extern "C"` signature in `handle.rs` takes or returns key bytes; keys are `DhowKey`/`DhowIdentity` handles. `scripts/check_abi.sh` compares the three views of the ABI but does **not** check this property. A future function taking a `*const u8` key would pass. |
+| 14 | Key material never crosses the FFI as raw bytes | Enforced | `scripts/security_lint.py` scans the generated header for a byte-pointer parameter named like a key, with the public-half exceptions written down. Shown to bite by adding a `dhow_key_import(const uint8_t *key_bytes, size_t)` declaration. |
 | 15 | `Debug` never reveals key material | Enforced | `property_test::debug_output_never_contains_key_material` (any four consecutive secret bytes, over arbitrary keys), `key_test::test_debug_does_not_reveal_operator_key` |
 | 16 | Error messages never contain key material | Enforced | `key_test::test_key_errors_do_not_contain_key_material`, `ffi_test::test_error_messages_carry_no_key_material` |
 | 17 | Logs never contain payload bytes or key material | Enforced | `cli/internal/log` `TestLogSilenceOnDataPath`, `TestLogNoPayloadBytes` |
@@ -273,25 +273,26 @@ which were ciphertext when the encoder produced them.
 | 42 | `govulncheck` runs | Enforced | `scripts/gate.sh`, CI |
 | 43 | `golangci-lint` runs with a committed config | Enforced | `scripts/gate.sh`, `.golangci.yml` |
 | 44 | `unsafe` appears only in `dhow-ffi` | Enforced | `#![forbid(unsafe_code)]` in `dhow-codec` and `dhow-crypt` is a compile error, not a lint; confirmed independently by `cargo geiger` (below) |
-| 45 | Every FFI entry point catches unwinds | Review | Every `extern "C"` body in `handle.rs` is wrapped in `guard` or `guard_ptr`. `ffi_test` covers null handling at each entry point but does not force a panic through each one. |
-| 46 | No network calls in the data path | **Absent** | Nothing checks this. `cargo deny` checks licenses, advisories, and duplicate versions - not sockets. The dependency list contains no networking crate, which was verified by reading it, and nothing would notice if one were added. |
+| 45 | Every FFI entry point catches unwinds | Enforced | `scripts/security_lint.py` requires every `extern "C" fn` to open with a guard. **It found fifteen that did not**: seven `*_free` functions whose `Drop` runs unguarded, five count-and-capacity accessors, `dhow_last_error_message` whose `RefCell::borrow` panics on re-entry, and three inert accessors now excluded by name with a check that they stay inert. Shown to bite by unwrapping `dhow_key_generate`. |
+| 46 | No network calls in the data path | Enforced | A `[bans] deny` list in `deny.toml` naming twelve transports and async runtimes, checked against the *resolved* graph rather than against `Cargo.toml`, because that is how a networking crate actually arrives. `scripts/security_lint.py` checks the list still names each of them so the two cannot drift. Shown to bite by removing `tokio` from the list. |
 | 47 | The gate bites when a control is removed | Enforced, partially | Demonstrated in-phase for the fuzz targets (Phase 29), the differential harness (Phase 30), and the conformance suite (Phase 29). Not demonstrated for every gate; the Phase 2 lint-gate demonstration was a one-off and is not re-run. |
 
 ### Gaps, restated
 
-Six rows are not enforced by anything: **9** (no secret-dependent branching),
-**10** (zeroization), **14** (no raw keys across the ABI), **27**
-(shoulder-surfing), **45** (unwind guards at every entry point), and **46** (no
-network calls). Of those:
+**Two rows** are not enforced by anything: **10** (zeroization) and **27**
+(shoulder-surfing). Neither is testable in a way worth having: observing a
+zeroized buffer means reading freed memory, and photographing a screen is not a
+unit test.
 
-- **10 and 27 are probably not testable** in a way worth having. Observing a
-  zeroized buffer means reading freed memory, and photographing a screen is not
-  a unit test.
-- **9, 14, 45, and 46 are testable** and are not tested. Each is a lint or a
-  source-level check over a small surface: a scan for `==` on secret types, a
-  scan of `extern "C"` signatures for pointer-shaped key arguments, a scan for a
-  `guard` wrapper in every entry point, and a dependency-name denylist. They are
-  recorded in `docs/BACKLOG.md` as **B-9**.
+Rows **9**, **14**, **45**, and **46** were in this list until Phase 39, which
+built `scripts/security_lint.py` and the `[bans]` denylist and wired both into
+the gate. Each was shown to bite by breaking the thing it checks. The scan for
+row 45 found **fifteen entry points with no unwind guard**, and the scan for
+row 9 found a type named `TransferSecrets` whose own doc comment said neither
+of its fields is secret - the same naming defect the Phase 32 audit found
+elsewhere, and now renamed to `TransferParameters`.
+
+**B-9 is closed.**
 
 ## `cargo geiger`
 
