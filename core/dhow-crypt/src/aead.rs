@@ -20,7 +20,7 @@
 //! the manifest alongside the salt.
 //!
 //! Reusing a nonce with the same key is catastrophic for a stream cipher, so
-//! the salt and nonce are drawn together in [`TransferSecrets::generate`] and
+//! the salt and nonce are drawn together in [`TransferParameters::generate`] and
 //! a fresh salt alone would be enough to make each transfer's key unique.
 //!
 //! # Associated data
@@ -123,17 +123,22 @@ impl std::fmt::Debug for TransferKeys {
 /// The public per-transfer values a receiver needs to reproduce the keys.
 ///
 /// Both are carried in the signed manifest. Neither is secret; both must be
-/// unpredictable, which is why they come from the CSPRNG rather than a
-/// counter or a clock.
+/// unpredictable, which is why they come from the CSPRNG rather than a counter
+/// or a clock.
+///
+/// Named `TransferSecrets` until Phase 39, which is the naming defect the
+/// threat-model audit found in a different place two phases earlier: a type
+/// whose doc comment says "neither is secret" and whose name says otherwise.
+/// The security lint reads the name, and so does everyone else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TransferSecrets {
+pub struct TransferParameters {
     /// Salt for key derivation.
     pub salt: Salt,
     /// Nonce for payload encryption.
     pub nonce: Nonce,
 }
 
-impl TransferSecrets {
+impl TransferParameters {
     /// Draws a fresh salt and nonce for a new transfer.
     pub fn generate() -> Result<Self, AeadError> {
         Ok(Self {

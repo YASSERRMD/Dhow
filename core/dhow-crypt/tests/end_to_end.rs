@@ -12,7 +12,7 @@
 use dhow_codec::blake3::blake3_digest;
 use dhow_codec::pipeline::{Pipeline, PipelineDecoder};
 use dhow_codec::session::{RaptorQParams, SessionParams};
-use dhow_crypt::aead::{TransferKeys, TransferSecrets, decrypt_payload, encrypt_payload};
+use dhow_crypt::aead::{TransferKeys, TransferParameters, decrypt_payload, encrypt_payload};
 use dhow_crypt::key::OperatorKey;
 
 const SESSION_ID: [u8; 16] = [0x5A; 16];
@@ -22,12 +22,12 @@ const SYMBOL_SIZE: u32 = 256;
 struct Transmission {
     frames: Vec<Vec<u8>>,
     params: SessionParams,
-    secrets: TransferSecrets,
+    secrets: TransferParameters,
 }
 
 /// Runs the sending half: derive keys, encrypt, chunk, and frame.
 fn send(operator: &OperatorKey, plaintext: &[u8], block_count: u32) -> Transmission {
-    let secrets = TransferSecrets::generate().expect("draw transfer secrets");
+    let secrets = TransferParameters::generate().expect("draw transfer secrets");
     let keys = TransferKeys::derive(operator, &secrets.salt).expect("derive transfer keys");
 
     // Encryption happens before chunking, so the codec only ever sees ciphertext.
