@@ -7,10 +7,32 @@ the long form, including what each phase found and where it fell short.
 Wire-format changes are marked **BREAKING** and carry a pointer to
 [`proto/migration.md`](proto/migration.md).
 
-## Unreleased
+## v1.0.0-rc.1 — Phase 36
 
-The format suite is frozen at **2.0** and the ABI at **4**. Nothing here has
-been tagged as a release; `v1.0.0` is Phase 36.
+Format suite **2.0**, C ABI **4**.
+
+- `scripts/triage.sh` enforces zero unresolved markers, with the fourteen
+  false-positive strings in this tree written down with reasons rather than
+  silenced by a `grep -v`.
+- The gate runs green from a **clean clone**: 26 checks, none skipped, in a
+  directory with no build products, no fuzz corpus, and no keys.
+
+**Why this is a release candidate and not 1.0.0.** Two things, both recorded in
+[B-11](docs/BACKLOG.md):
+
+1. **The camera path does not exist.** Dhow's purpose is crossing an air gap by
+   showing frames on a screen and reading them with a camera. Every layer above
+   the optical one is exercised end to end; the tool still cannot do the thing
+   it is for.
+2. **B-1 is open** — an unreproduced possible-correctness defect whose own entry
+   says to treat it as high until reproduced. 2,960 chaos rounds have not
+   reproduced it, which bounds how common it is rather than whether it exists.
+
+Everything else a 1.0.0 asks for is done: the format suite is frozen with a
+compatibility policy, the ABI is stable, the build is reproducible and the
+release signed by dhow itself, the documentation is complete and executed by the
+gate, and every threat-model control is traced to a test or recorded as
+unenforced.
 
 ### Phase 35 — Documentation completion
 
