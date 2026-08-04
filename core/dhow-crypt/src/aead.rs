@@ -162,7 +162,7 @@ pub fn encrypt_payload(
 
     cipher
         .encrypt(
-            XNonce::from_slice(nonce.as_bytes()),
+            &XNonce::from(*nonce.as_bytes()),
             Payload {
                 msg: plaintext,
                 aad: session_id,
@@ -201,7 +201,7 @@ pub fn decrypt_payload(
 
     cipher
         .decrypt(
-            XNonce::from_slice(nonce.as_bytes()),
+            &XNonce::from(*nonce.as_bytes()),
             Payload {
                 msg: ciphertext,
                 aad: session_id,
