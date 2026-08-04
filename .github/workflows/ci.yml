@@ -195,7 +195,7 @@ jobs:
       - run: scripts/fuzz.sh 120
       # A crash is only actionable if the input that caused it survives the
       # runner. Uploaded on failure, because on success there is nothing there.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: fuzz-artifacts
@@ -224,7 +224,7 @@ jobs:
       - run: scripts/release.sh "$RUNNER_TEMP/dist"
       # The artifacts are worth keeping even on a green run: a reproducible
       # build is only useful if someone can compare against what was published.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-linux-x86_64
           path: ${{ runner.temp }}/dist/
