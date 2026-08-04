@@ -32,11 +32,21 @@ type Stats struct {
 	Repeats int
 	// Frames is how many were handed on to the decoder.
 	Frames int
+	// Skipped is how many were abandoned unexamined because the run was
+	// already ending on an error.
+	//
+	// A separate bucket rather than being folded into Dropped, and the reason
+	// is the test rather than the operator. Reconciling the totals at the end -
+	// "whatever is missing must have been dropped" - was tried first, and it
+	// makes Accounted unfalsifiable: deleting one of the increments below left
+	// every test passing, because the reconciliation put the number back.
+	Skipped int
 }
 
 // Accounted reports whether every image is in exactly one bucket.
 func (s Stats) Accounted() bool {
-	return s.Images == s.Dropped+s.Unreadable+s.Foreign+s.Damaged+s.Repeats+s.Frames
+	return s.Images == s.Dropped+s.Unreadable+s.Foreign+s.Damaged+
+		s.Repeats+s.Frames+s.Skipped
 }
 
 // Handler receives each frame the capture recovered.
@@ -160,6 +170,7 @@ func (r *Reader) runBuffered(ctx context.Context, src Source, handle Handler) (S
 		if handleErr != nil {
 			// Keep draining so the producer's accounting completes rather
 			// than blocking it on a channel nobody will read.
+			stats.Skipped++
 			continue
 		}
 		if err := r.consume(img, held, &stats, handle); err != nil {
@@ -171,11 +182,6 @@ func (r *Reader) runBuffered(ctx context.Context, src Source, handle Handler) (S
 	p := <-done
 	stats.Images = p.images
 	stats.Dropped = p.dropped
-	// An image the producer handed over and the consumer skipped after an
-	// error is neither delivered nor dropped by the producer's reckoning.
-	if delivered := stats.Images - stats.Dropped; delivered > r.processed(stats) {
-		stats.Dropped += delivered - r.processed(stats)
-	}
 
 	switch {
 	case handleErr != nil:
@@ -185,11 +191,6 @@ func (r *Reader) runBuffered(ctx context.Context, src Source, handle Handler) (S
 	default:
 		return stats, nil
 	}
-}
-
-// processed counts the images the consumer reached a verdict on.
-func (r *Reader) processed(s Stats) int {
-	return s.Unreadable + s.Foreign + s.Damaged + s.Repeats + s.Frames
 }
 
 // consume runs one image through detection, the pre-filter, and the handler.
