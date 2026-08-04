@@ -1,5 +1,273 @@
 # Phase Log
 
+## Phase 37 - Camera capture and QR detection
+
+**Objective:** Dhow's stated purpose is moving a dataset across an air gap by
+showing frames on a screen and reading them with a camera. Thirty-six phases
+built everything above the optical layer and frames still move between the two
+halves through a directory. This phase builds the half that was missing: an
+image arrives, it is binarized, the QR code in it is located and sampled into a
+module grid, the grid is decoded back into the wire frame that was rendered, the
+frame's CRC is checked before it crosses the FFI, and the decoder accepts it.
+Capture sits behind an interface so the source of the images - a directory, a
+pipe, a spawned `ffmpeg` - is a choice rather than a rewrite.
+
+**Gates: redefined, and here is why.** The original pack (Phases 24 and 25) asks
+for recorded video fixtures at three quality levels. Those fixtures do not exist
+in this repository and cannot be recorded in this session: there is no camera,
+no screen to point it at, and a committed video file would be an artifact nobody
+could regenerate or review. Recording them elsewhere and committing the result
+would make the gate depend on binary blobs whose provenance is a sentence in a
+log.
+
+So the gate is redefined: the detection pipeline is driven by **rendered**
+frames - the renderer already produces exactly the images the screen would show
+- with **synthetic degradation** applied to them, standing in for what a camera
+does to a screen. Blur, perspective skew, partial occlusion, motion smear,
+sensor noise, and reduced contrast, each applied at a measured strength, with
+the test asserting the strength at which detection still succeeds rather than
+only that it succeeds somewhere. This is the same kind of substitution Phase 31
+made when it declared the RSS budget a ratio rather than an absolute at 1 GiB,
+and Phase 34 made when it froze the format suite at 2.0 rather than 1.0: the
+property being checked is preserved and the thing that cannot be produced here
+is named rather than faked.
+
+What this does **not** establish is stated plainly in the phase's closing notes
+and in `docs/BACKLOG.md`: synthetic degradation is a model of a camera, not a
+camera. The hardware path - a real sensor, a real lens, a real screen at a real
+distance under real light - remains unexercised.
+
+### The dependency decision: none
+
+The continuation prompt anticipated a QR decoder being added to `go.mod`, which
+has no external dependencies at all. It is not. Rejected, with reasons, in the
+commit that added the decoder:
+
+- **`github.com/makiuchi-d/gozxing`.** A port of ZXing carrying its own image,
+  Reed-Solomon, and multi-format decoding stack. It would put an unfuzzed parser
+  of tens of thousands of lines directly on the path that first touches hostile
+  optical input, and it would be `go.mod`'s first dependency.
+- **`github.com/tuotoo/qrcode`.** Smaller, unmaintained, no test corpus, and a
+  decode path that indexes slices from values read out of the symbol.
+- **Writing it in Rust as part of `dhow-codec`.** The architecture assigns QR
+  detection to Go, and the per-frame CRC fast-reject the pack specifies has to
+  happen *before* the FFI crossing, which means the frame bytes have to exist on
+  the Go side first.
+
+What tipped it was that the surface dhow needs is bounded - byte mode, single
+segment, versions 1 to 40 - and is the exact inverse of something this
+repository already ships an encoder for. That means it can be checked against
+that encoder at **every one of the 160 version-and-level configurations** rather
+than against a fixture, which is stronger evidence than any dependency arrives
+with. `go.mod` still has no dependencies and `sbom-cli.json` still lists zero
+components.
+
+### Three tests changed the implementation rather than recording it
+
+This is the pattern the last nine phases established, and it held again.
+
+**Rotation found the module size being measured along the scan line.** A
+horizontal scan crosses a symbol rotated by 45 degrees along its diagonal, so
+every ring of a finder pattern reads root-two too wide. The 1:1:3:1:1 ratio still
+holds - which is why the patterns were still *found* - but the scale was
+inflated, the dimension estimate came out a version or more short, and the
+symbol was sampled on the wrong grid. **20 of 24 rotations failed.** Measuring
+the module size along the line joining two finder centres instead, which is
+independent of the scan direction, took it to 22 of 24; the last two came from
+the sampler.
+
+**Perspective found the fourth corner being assumed.** A QR symbol has finder
+patterns in three corners and an alignment pattern near the fourth, and the
+sampler was using the parallelogram the other three imply - which is exact only
+if the projection is affine, and a camera off the screen's normal is precisely
+the case where it is not. At version 25, **any** perspective at all failed. Two
+changes fixed it: checking an alignment-pattern candidate against the whole
+five-by-five structure (seventeen sampled modules) rather than the three of one
+line through it, and then offering *both* the found corner and the assumed one
+as candidate grids and letting the decoder arbitrate. Arbitration is free and
+much stronger than a geometric confidence interval: a symbol sampled on the
+wrong grid fails its format information or its error correction, and both are
+already checked.
+
+**Contrast found the binarizer assuming black is near zero.** The standard
+fallback for an image region with no edge in it is half that region's darkest
+pixel, which is right when black is 0 and wrong when a screen behind glare has a
+black nearer 100 - it read every uniform dark region as light. Seeding the
+threshold chain from the whole image's midpoint instead took the tolerable
+contrast compression from 60% of full range to 40%.
+
+Two further attempts to push contrast below 40% were tried and **reverted**,
+because both traded away more defocus tolerance than they bought: averaging only
+over blocks that measured a real threshold cut version 15's blur tolerance from
+0.44 modules to 0.19. The limit is recorded in the test with the reason rather
+than tuned away.
+
+### The measured tolerances
+
+At 8 pixels per module, each degradation applied alone, with the test asserting
+the strength at which detection stopped rather than only that it worked:
+
+```
+readable through a blur radius of 3.5 to 4.0 px (0.44 to 0.50 modules)
+readable with the far edge shrunk by 6% (v25) to 12% (v5)
+readable at all 24 rotations from 0 to 345 degrees
+readable through a motion smear of 13 px (1.62 modules) at 0, 30, and 90 degrees
+three quarters of placements survived an opaque patch over 8% (M) to 12% (H)
+readable with the corners darkened by 70%
+readable with contrast compressed to 40% of full range
+readable at a noise standard deviation of 20 grey levels
+readable down to 2.0 camera pixels per module, at every version tested
+```
+
+**The combined test is the one that produced the useful number.** Each effect in
+it is well inside its own limit - a blur radius of 0.15 modules against a limit
+near 0.5, a smear of 0.3 modules against 1.6, four per cent of perspective
+against twelve - and the combination is far harsher, and bites larger versions
+first:
+
+```
+version 5  level M: 16 of 20 captures decoded, 0 wrong
+version 5  level Q: 13 of 20 captures decoded, 0 wrong
+version 12 level M: 12 of 20 captures decoded, 0 wrong
+version 12 level Q:  9 of 20 captures decoded, 0 wrong
+version 20 level M:  2 of 20 captures decoded, 0 wrong
+version 20 level Q:  3 of 20 captures decoded, 0 wrong
+```
+
+That falloff is where `docs/OPERATIONS.md`'s recommendation to stay at or below
+version 12 comes from. **Zero wrong at every version** is the property that
+actually matters: a frame that fails to decode costs one more showing of it, and
+a frame that decodes to plausible wrong bytes reaches the frame parser with only
+the CRC and the session MAC behind it.
+
+### An accounting check that could not fail
+
+`capture.Stats` puts every image in exactly one bucket and `Accounted()` checks
+the totals add up. The first version reconciled at the end - "whatever is
+missing must have been dropped" - and that made the check **unfalsifiable**.
+Deleting one of the two drop increments left every test passing, because the
+reconciliation put the number back.
+
+This is the "assertion that had to be weakened" pattern the handover prompt
+names, arriving in a slightly different disguise: not an assertion weakened to
+pass, but one arranged so it could never fail. Images abandoned unexamined
+because a run was already ending now have their own bucket, counted where it
+happens. With the reconciliation removed, the same deletion fails both tests:
+
+```
+--- FAIL: TestStatsAccountForEveryImage
+    buffered=true: 40 images do not add up to
+    {Images:40 Dropped:0 Unreadable:2 Foreign:0 Damaged:0 Repeats:0 Frames:0 Skipped:0}
+--- FAIL: TestBufferedReaderDropsRatherThanBlocks
+    accounting broke: {Images:30 Dropped:0 Unreadable:6 ...}
+```
+
+### The drop policy is a property of the source, so it is a flag
+
+Detection is slower than a camera, so something has to be discarded, and the
+newest image is what to keep: the sender loops the whole stream, so a stale
+frame carries nothing a fresh one does not.
+
+Applying that to a *recording* replayed as fast as a process can read it loses
+most of it - **9 of 60 frames survived** in the first end-to-end run through a
+pipe. Dhow cannot tell a live source from a recording, so `-drop` is a flag,
+defaulting to the live behaviour, and `docs/OPERATIONS.md` says when to turn it
+off.
+
+### Dhow does not open the camera
+
+Opening one is platform work - AVFoundation, V4L2, Media Foundation - each with
+its own device enumeration, pixel formats, and exposure controls. Writing three
+of those inside a tool whose correctness-critical parts are elsewhere would add
+a large amount of code nobody here can test, on the one machine in the
+deployment that is deliberately off every network and therefore hardest to debug
+on.
+
+`recv -source` names a source instead: a directory, a pipe, or a program dhow
+starts. The third is the camera path, and an `ffmpeg` invocation against
+`avfoundation` or `v4l2` is a camera - already installed wherever video work
+happens, already solving the platform problem, and replaceable by an operator
+whose hardware needs something else without touching dhow.
+
+Netpbm on the wire rather than PNG, and the reason is not aesthetic: a PNG
+decoder buffers past the end of one image and loses the start of the next in a
+concatenated stream. The Netpbm header declares its own length exactly. A test
+puts a sentinel after the last image in a five-image stream and reads it back,
+which is how the header parser was caught consuming one byte too many - shifting
+every image by a pixel, which produces a picture that still looks almost right
+and decodes to nothing.
+
+### The gate was shown to bite
+
+`scripts/optical.sh`, with one QR mask pattern changed from `x%3` to `x%4`:
+
+```
+  PASS  rendered 574 frames as QR codes
+  PASS  detect reads a rendered frame and names its version and session
+  FAIL  a clean rendering was unreadable; the detector is not doing its job
+```
+
+and the unit tests, on the same change:
+
+```
+--- FAIL: TestRoundTripEveryVersionAndLevel
+    version 3 level H: decode: block 0: qr: block has more errors than can be corrected
+--- FAIL: TestSurvivesDefocus
+    version 5 at 8 px/module: readable through a blur radius of -0.5 px
+```
+
+The table check bit during development rather than in a demonstration: it
+predicts each configuration's capacity from two transcribed tables by a
+different route than the encoder measures it, and caught a wrong
+alignment-pattern spacing formula that made **every version from 7 upward**
+undecodable while 1 to 6 passed.
+
+### Three defects fixed, all predating this phase
+
+Found by running the gate, which had not been run on `main` since the
+dependabot merges that followed Phase 36:
+
+1. **`cargo clippy -D warnings` was failing.** chacha20poly1305 0.11 deprecated
+   `Array::from_slice`, and clippy runs with `-D warnings`, so the Rust half of
+   the gate had stopped compiling. The nonce is a fixed `[u8; 24]`, so the
+   infallible `From` is the right replacement.
+2. **`cargo deny` was failing.** The same bump split `block-buffer` and
+   `crypto-common` between ed25519-dalek's digest stack and chacha20poly1305's.
+   Recorded with reasons; the `getrandom@0.2` skip is deleted, because that bump
+   resolved it and `deny.toml`'s own note says a stale skip is removed rather
+   than left to mask a future one.
+3. **`scripts/drill.sh` exited 141 after printing every PASS.** `find | sort |
+   head -1` makes `head` close the pipe, `sort` takes SIGPIPE, and `pipefail`
+   reports a failed pipeline. Replaced with a glob in all three harnesses.
+
+### Gate run
+
+Twenty-seven checks, from a working tree:
+
+```
+=== GATE SUMMARY ===
+  Passed:  27
+  Failed:  0
+  Skipped: 0
+ALL GATES PASSED
+```
+
+The new one is `optical end-to-end`. `README quickstart` and `operations guide
+drill` both grew optical steps, so the three documents that describe the camera
+path are executed rather than believed.
+
+### Not a deviation: 29 commits, but no tag
+
+Twenty-nine against the pack's floor of twenty, which is the first phase since
+29 to clear it honestly - a wire-format-and-implementation phase decomposes
+further than a documentation one.
+
+**No tag was cut.** `v1.0.0-rc.1` remains the newest version tag. The camera
+path existing changes B-11's first blocker but does not close it: the evidence
+is a model of a camera, and whether that is enough is a judgement about
+deployment risk rather than about code. That call belongs to the operator, and
+`docs/BACKLOG.md` says what would settle it.
+
 ## Phase 36 - Release candidate
 
 **Objective:** the last release phase. Every TODO and FIXME in the tree is

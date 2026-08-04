@@ -38,7 +38,9 @@ for snippet in \
     "./dhow keygen -kind identity -out sender.key" \
     "./dhow send -key operator.key -identity sender.key -in ./mydata -out ./frames" \
     "./dhow recv -key operator.key -signer sender.pub -in ./frames -out ./received" \
-    "./dhow verify -in ./frames -signer sender.pub -dir ./received"
+    "./dhow verify -in ./frames -signer sender.pub -dir ./received" \
+    "./dhow display -in ./frames -signer sender.pub -fps 8" \
+    "./dhow detect -binarized ./seen ./capture.png"
 do
     grep -qF -- "$snippet" "$README" \
         || fail "the README no longer contains '$snippet'; this script is out of date"
@@ -114,6 +116,36 @@ set -e
 [ ! -d ./intruder ] \
     || fail "a transfer with an unverifiable signature still wrote output"
 pass "a transfer signed by another identity is refused, and writes nothing"
+
+# --- The README's "Across a screen" section ---
+#
+# The camera command in it cannot run here, but everything on either side of it
+# can: rendering the frames, reading one back with detect, and receiving from
+# images. The one part that needs hardware is the capture program, and the
+# receiver treats it as a source of images like any other.
+
+./dhow send -key operator.key -identity sender.key -in ./mydata -out ./optical \
+    -symbol-size 96 -qr -qr-version 8 -qr-ecc M >/dev/null
+RENDERED=$(find ./optical -name 'frame-*.png' | wc -l | tr -d ' ')
+[ "$RENDERED" -gt 0 ] || fail "the README's -qr flags rendered no images"
+pass "rendered ${RENDERED} frames as QR codes"
+
+# A glob rather than `find | sort | head`: head closing the pipe sends
+# SIGPIPE to sort, which pipefail then reports as a failed pipeline.
+set -- ./optical/frame-*.png
+FIRST="$1"
+./dhow detect -binarized ./seen "$FIRST" > detect.log
+grep -q "dhow frame" detect.log \
+    || fail "detect did not recognise a frame the tool had just rendered"
+[ -n "$(find ./seen -name '*.binarized.png')" ] \
+    || fail "detect -binarized wrote nothing, which the README says it does"
+pass "detect read a rendered frame and wrote what the binarizer saw"
+
+./dhow recv -key operator.key -signer sender.pub -in ./optical -source images \
+    -out ./from-screen >/dev/null
+diff -r ./mydata ./from-screen >/dev/null \
+    || fail "a transfer read back from images differs from the one that was sent"
+pass "a transfer across the optical layer round trips byte for byte"
 
 echo
 echo "=== QUICKSTART PASSED ==="

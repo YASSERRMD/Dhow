@@ -127,6 +127,15 @@ run_gate "govulncheck" \
 run_gate "loopback end-to-end" \
     bash -c "'$ROOT/scripts/loopback.sh' 2 20 >/dev/null"
 
+# The loopback moves frames between the two halves as files, which exercises
+# everything above the optical layer and nothing in it. This one moves them as
+# pictures, through the same binary's own command line: rendered, located,
+# sampled, decoded. Added in Phase 37 with the camera path; before it, the
+# tool's stated purpose had no end-to-end check at all.
+
+run_gate "optical end-to-end" \
+    bash -c "'$ROOT/scripts/optical.sh' 8 25 >/dev/null"
+
 # --- README ---
 #
 # A quickstart that does not work is the first thing a reader tries and the

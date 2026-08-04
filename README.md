@@ -13,10 +13,20 @@ authenticated before it is ever framed, fountain-coded so a lossy channel still
 completes, resumable if the receiver is interrupted, and verifiable against a
 signed per-file inventory long after the fact.
 
-**The camera half is not built.** Frames move between the two halves through a
-directory, which exercises every layer above the optical one without hardware.
-You can test this end to end today; you cannot yet run it across a real air gap.
-See [B-3](docs/BACKLOG.md).
+The camera half exists as of Phase 37: `recv` reads images, finds the QR symbol
+in each one, samples it through the perspective the camera introduced, decodes
+it, and checks the frame's CRC before it crosses into the core. Images come from
+a directory, a pipe, or a capture program dhow starts — `ffmpeg` against
+`avfoundation` or `v4l2` is the usual one, because opening a camera is platform
+work already solved better elsewhere.
+
+**What has not been done is point a real camera at a real screen.** The
+detection pipeline is driven by rendered frames with synthetic degradation
+standing in for a lens: measured, at 8 pixels per module, it reads through a
+blur radius of half a module, twelve per cent of perspective shrink, a 1.6-module
+motion smear, every rotation, an opaque patch over a tenth of the frame, and
+contrast compressed to 40% of full range. That is a model of a camera, not a
+camera. See [B-3](docs/BACKLOG.md).
 
 Two more limits worth knowing before relying on it, both measured rather than
 guessed:
@@ -54,12 +64,40 @@ go build -o dhow ./cli/cmd/dhow
 ./dhow verify -in ./frames -signer sender.pub -dir ./received
 ```
 
+### Across a screen
+
+The quickstart above moves frames as files, which is the shape everything is
+tested in. To cross a real air gap, render the frames, show them, and read them
+back:
+
+```bash
+# Sender: render every frame as a QR code as well as a binary frame
+./dhow send -key operator.key -identity sender.key -in ./mydata -out ./frames \
+  -symbol-size 96 -qr -qr-version 8 -qr-ecc M
+
+# Sender: loop the stream on screen until the receiver has enough
+./dhow display -in ./frames -signer sender.pub -fps 8
+
+# Receiver: read from a camera through a capture program
+./dhow recv -key operator.key -signer sender.pub -in ./frames -out ./received \
+  -source "cmd:ffmpeg -f avfoundation -framerate 10 -i 0 -f image2pipe -vcodec pgm -"
+
+# Diagnose one picture when nothing is decoding
+./dhow detect -binarized ./seen ./capture.png
+```
+
+The receiver needs `manifest.bin` from the sender's `-in` directory before it
+can decode anything: it carries the session parameters and is what the signature
+covers. Carry it across with the keys.
+[Operations](docs/OPERATIONS.md#the-camera) covers the capture command for each
+platform, what QR version to choose, and how to read the counts `recv` prints.
+
+## The two keys
+
 `operator.key` goes to both machines. `sender.key` **never leaves the sending
 machine**; carry `sender.pub` to the receiver and compare the fingerprint
 `keygen` printed. The [key ceremony](docs/OPERATIONS.md#key-ceremony) explains
 why that comparison is the step that matters.
-
-## The two keys
 
 |  | `operator.key` | `sender.key` |
 |--|----------------|--------------|
@@ -78,7 +116,7 @@ signed manifest.
 
 | | |
 |--|--|
-| [Operations Guide](docs/OPERATIONS.md) | Setup, coding parameters, the key ceremony, troubleshooting |
+| [Operations Guide](docs/OPERATIONS.md) | Setup, the camera, coding parameters, the key ceremony, troubleshooting |
 | [Architecture](docs/ARCHITECTURE.md) | How the pieces fit and why the seams are there |
 | [Verifying a Dataset](docs/VERIFY.md) | What `dhow verify` proves, and what it does not |
 | [Resuming a Receive](docs/RESUME.md) | Interrupted transfers |

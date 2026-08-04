@@ -214,5 +214,52 @@ done
 diff -r ./dataset ./r11 >/dev/null || fail "the recovered dataset differs"
 pass "the guide's block-count advice holds: 8 blocks fails where 11 survives"
 
+# --- The camera section ---
+#
+# The guide names four sources and a set of counts an operator is told to read.
+# The camera itself cannot be run here, but the source it names is the same
+# object as a directory of images, and the counts are printed by the same code
+# whichever source produced them.
+
+"$DHOW" send -key operator.key -identity ./sender.key -in ./dataset -out ./optical \
+    -symbol-size 96 -blocks 2 -overhead 100 \
+    -qr -qr-version 8 -qr-ecc M -qr-scale 6 >/dev/null
+
+"$DHOW" recv -key operator.key -signer ./sender.pub -in ./optical -source images \
+    -out ./from-camera > optical.log
+diff -r ./dataset ./from-camera >/dev/null \
+    || fail "a transfer read back through the optical layer differs from the one sent"
+
+# Every bucket the guide's table names has to appear, or an operator following
+# it is reading for something the tool does not print.
+for bucket in dropped unreadable foreign damaged repeats; do
+    grep -q "$bucket" optical.log \
+        || fail "recv does not report '${bucket}', which the guide's count table names"
+done
+pass "an optical transfer round trips and reports every count the guide names"
+
+# The guide tells an operator to run detect on one saved capture, and says
+# -binarized writes what the binarizer saw.
+# A glob rather than `find | sort | head`: head closing the pipe sends
+# SIGPIPE to sort, which pipefail then reports as a failed pipeline.
+set -- ./optical/frame-*.png
+FIRST="$1"
+"$DHOW" detect -binarized ./seen "$FIRST" > detect.log
+grep -q "dhow frame" detect.log \
+    || fail "detect did not name a dhow frame, which the guide says it does"
+[ -n "$(find ./seen -name '*.binarized.png')" ] \
+    || fail "detect -binarized wrote nothing, which the guide says it does"
+pass "detect names the frame and writes what the binarizer saw"
+
+# The guide says an unknown source is a usage error rather than a receiver that
+# quietly reads nothing.
+set +e
+"$DHOW" recv -key operator.key -signer ./sender.pub -in ./optical -source webcam \
+    -out ./nowhere >/dev/null 2>&1
+BAD_SOURCE=$?
+set -e
+[ "$BAD_SOURCE" -eq 1 ] || fail "an unknown -source exited ${BAD_SOURCE}, expected 1"
+pass "an unknown -source is a usage error"
+
 echo
 echo "=== DRILL PASSED ==="

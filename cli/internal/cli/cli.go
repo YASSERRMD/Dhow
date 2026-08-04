@@ -44,6 +44,7 @@ import (
 	"strings"
 	"syscall"
 
+	"dhow/cli/internal/capture"
 	"dhow/cli/internal/display"
 	"dhow/cli/internal/ffi"
 	"dhow/cli/internal/pack"
@@ -66,7 +67,10 @@ const (
 type Env struct {
 	Stdout io.Writer
 	Stderr io.Writer
-	Args   []string
+	// Stdin is where "recv -source pipe" reads captured images from. Nil in
+	// tests and in every command that does not read a stream.
+	Stdin io.Reader
+	Args  []string
 }
 
 // exitError carries an exit code alongside a message.
@@ -101,6 +105,8 @@ func Run(env Env) int {
 		err = runRecv(env, args)
 	case "display":
 		err = runDisplay(env, args)
+	case "detect":
+		err = runDetect(env, args)
 	case "verify":
 		err = runVerify(env, args)
 	case "version":
@@ -139,6 +145,7 @@ Commands:
   send      encode a directory into a signed stream of QR frames
   display   loop a frame stream on screen for a camera to read
   recv      decode captured frames back into a directory
+  detect    read the QR symbol in one image and say what it holds
   verify    check a received dataset against its signed manifest
   version   print version and ABI information
 
@@ -770,20 +777,112 @@ func planSession(payloadLen int, symbolSize, blocks, overheadPct uint) (ffi.Sess
 // --- recv ---
 
 type recvResult struct {
-	SessionID string `json:"session_id"`
-	Frames    int    `json:"frames_accepted"`
-	Rejected  int    `json:"frames_rejected"`
-	Resumed   int    `json:"frames_resumed"`
-	Files     int    `json:"files"`
-	OutDir    string `json:"out_dir"`
-	StateDir  string `json:"state_dir,omitempty"`
+	SessionID string         `json:"session_id"`
+	Frames    int            `json:"frames_accepted"`
+	Rejected  int            `json:"frames_rejected"`
+	Resumed   int            `json:"frames_resumed"`
+	Files     int            `json:"files"`
+	OutDir    string         `json:"out_dir"`
+	StateDir  string         `json:"state_dir,omitempty"`
+	Capture   *captureResult `json:"capture,omitempty"`
+}
+
+// captureResult reports what the optical path saw. Absent from the JSON when
+// frames came from a directory, because zeros there would read as a camera
+// that saw nothing rather than as a path that was not used.
+type captureResult struct {
+	Images     int `json:"images"`
+	Dropped    int `json:"dropped"`
+	Unreadable int `json:"unreadable"`
+	Foreign    int `json:"foreign"`
+	Damaged    int `json:"damaged"`
+	Repeats    int `json:"repeats"`
+}
+
+// errStopAfter ends a receive because the operator asked for a frame limit. It
+// is a normal end, not a failure, and never reaches the operator's output.
+var errStopAfter = errors.New("frame limit reached")
+
+// frameSink applies frames to the decoder, wherever they came from.
+//
+// Extracted when the optical path arrived, because the two sources differ only
+// in how a frame is obtained: what happens to it afterwards - authentication,
+// progress reporting, journalling - has to be identical, and would not stay
+// identical if it were written twice.
+type frameSink struct {
+	env       Env
+	level     verbosity
+	dec       *ffi.Decoder
+	store     *resume.Store
+	saveEvery uint
+	stopAfter uint
+	blocks    uint32
+	resumed   int
+
+	accepted   int
+	rejected   int
+	blocksDone int
+}
+
+// apply hands one frame to the decoder and records what became of it.
+func (s *frameSink) apply(frame []byte) (bool, error) {
+	// A frame that fails to authenticate is discarded and the receiver keeps
+	// going, exactly as it would with a blurred camera capture.
+	if err := s.dec.Accept(frame); err != nil {
+		s.rejected++
+		return false, nil
+	}
+	s.accepted++
+
+	// Progress is reported by block rather than by frame. Frames arrive in
+	// their thousands and most of them change nothing an operator can act on;
+	// a block completing is the unit of real progress, and it is what tells
+	// them whether pointing the camera differently is helping.
+	if s.level >= loud {
+		done, err := s.dec.BlocksComplete()
+		if err != nil {
+			return true, failf(ExitInternal, "reading progress: %w", err)
+		}
+		if done != s.blocksDone {
+			s.blocksDone = done
+			s.level.say(s.env.Stderr, loud, "%d of %d blocks decoded (%d frames accepted, %d rejected)\n",
+				done, s.blocks, s.resumed+s.accepted, s.rejected)
+		}
+	}
+
+	// Journal first, then the index. The other order would produce an index
+	// describing a frame the journal does not hold, which is the one
+	// inconsistency a replay cannot recover from.
+	if s.store != nil {
+		if err := s.store.Append(frame); err != nil {
+			return true, failf(ExitInput, "recording progress: %w", err)
+		}
+		if uint(s.accepted)%s.saveEvery == 0 {
+			if err := saveProgress(s.store, s.dec); err != nil {
+				return true, err
+			}
+		}
+	}
+
+	if s.stopAfter > 0 && uint(s.accepted) >= s.stopAfter {
+		return true, errStopAfter
+	}
+	return true, nil
 }
 
 func runRecv(env Env, args []string) error {
 	fs := newFlagSet("recv", env)
 	keyPath := fs.String("key", "operator.key", "operator key file")
 	signerPath := fs.String("signer", "sender.pub", "public identity the manifest must be signed by")
-	in := fs.String("in", "frames", "directory holding captured frames")
+	in := fs.String("in", "frames", "directory holding the manifest and, for -source frames, the frames")
+	source := fs.String("source", "frames", captureSourceUsage)
+	dropLate := fs.Bool("drop", true, `discard captured images while detection is busy.
+    Right for a camera, which produces images whether or not anybody is
+    reading them: the newest one is always the most useful. Wrong for
+    replaying a recorded stream faster than it was captured, where it
+    discards frames that will never be shown again. Ignored by -source
+    frames and -source images, which read a directory that is not going
+    anywhere.`)
 	outDir := fs.String("out", "received", "directory to extract into")
 	stateDir := fs.String("state", "", "directory to keep resumable progress in")
 	saveEvery := fs.Uint("save-every", 200, "accepted frames between saves of the resume state")
@@ -832,15 +931,6 @@ func runRecv(env Env, args []string) error {
 	}
 	defer dec.Close()
 
-	names, err := filepath.Glob(filepath.Join(*in, "frame-*.bin"))
-	if err != nil {
-		return failf(ExitInput, "listing frames in %s: %w", *in, err)
-	}
-	if len(names) == 0 {
-		return failf(ExitInput, "no frames found in %s", *in)
-	}
-	sort.Strings(names)
-
 	// Restore whatever a previous run got through, if the operator asked for
 	// resumable progress and there is any.
 	store, resumed, err := restoreProgress(env, level, *stateDir, sessionID, dec)
@@ -856,78 +946,26 @@ func runRecv(env Env, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// How many consecutive rejections with nothing accepted before saying so.
-	// Low enough to be noticed early, high enough not to fire on the ordinary
-	// run of unreadable frames at the start of a capture.
-	const captureNoiseWarning = 50
+	sink := &frameSink{
+		env: env, level: level, dec: dec, store: store,
+		saveEvery: *saveEvery, stopAfter: *stopAfter,
+		blocks: params.BlockCount, resumed: resumed,
+		blocksDone: -1,
+	}
 
-	accepted, rejected := 0, 0
-	blocksDone := -1
+	var captureStats *capture.Stats
 	stopped := false
 
-	level.say(env.Stderr, loud, "decoding %d blocks from %d captured frames\n",
-		params.BlockCount, len(names))
-
-	for _, name := range names {
-		if ctx.Err() != nil {
-			stopped = true
-			break
-		}
-		if *stopAfter > 0 && uint(accepted) >= *stopAfter {
-			stopped = true
-			break
-		}
-		if len(names) > 0 && level >= loud && accepted == 0 && rejected == captureNoiseWarning {
-			// Frames are arriving and none of them authenticate. That is the
-			// wrong key, not a bad camera angle, and an operator who does not
-			// hear it now will wait out the whole stream to learn it.
-			level.say(env.Stderr, loud,
-				"warning: %d frames read and none accepted; this is what a wrong key looks like\n",
-				rejected)
-		}
-
-		frame, err := os.ReadFile(name)
-		if err != nil {
-			return failf(ExitInput, "reading %s: %w", name, err)
-		}
-		// A frame that fails to authenticate is discarded and the receiver
-		// keeps going, exactly as it would with a blurred camera capture.
-		if err := dec.Accept(frame); err != nil {
-			rejected++
-			continue
-		}
-		accepted++
-
-		// Progress is reported by block rather than by frame. Frames arrive in
-		// their thousands and most of them change nothing an operator can act
-		// on; a block completing is the unit of real progress, and it is what
-		// tells them whether pointing the camera differently is helping.
-		if level >= loud {
-			done, err := dec.BlocksComplete()
-			if err != nil {
-				return failf(ExitInternal, "reading progress: %w", err)
-			}
-			if done != blocksDone {
-				blocksDone = done
-				level.say(env.Stderr, loud, "%d of %d blocks decoded (%d frames accepted, %d rejected)\n",
-					done, params.BlockCount, resumed+accepted, rejected)
-			}
-		}
-
-		// Journal first, then the index. The other order would produce an
-		// index describing a frame the journal does not hold, which is the one
-		// inconsistency a replay cannot recover from.
-		if store != nil {
-			if err := store.Append(frame); err != nil {
-				return failf(ExitInput, "recording progress: %w", err)
-			}
-			if uint(accepted)%*saveEvery == 0 {
-				if err := saveProgress(store, dec); err != nil {
-					return err
-				}
-			}
-		}
+	if *source == "frames" {
+		stopped, err = receiveFromFrames(ctx, env, level, *in, sink)
+	} else {
+		captureStats, stopped, err = receiveFromCapture(
+			ctx, env, level, *source, *in, sessionID, *dropLate, sink)
 	}
+	if err != nil {
+		return err
+	}
+	accepted, rejected := sink.accepted, sink.rejected
 
 	if store != nil {
 		if err := saveProgress(store, dec); err != nil {
@@ -999,6 +1037,20 @@ func runRecv(env Env, args []string) error {
 	if store != nil {
 		stateShown = store.Dir()
 	}
+
+	var captured *captureResult
+	if captureStats != nil {
+		human = captureSummary(*captureStats) + human
+		captured = &captureResult{
+			Images:     captureStats.Images,
+			Dropped:    captureStats.Dropped,
+			Unreadable: captureStats.Unreadable,
+			Foreign:    captureStats.Foreign,
+			Damaged:    captureStats.Damaged,
+			Repeats:    captureStats.Repeats,
+		}
+	}
+
 	return emit(env.Stdout, *asJSON,
 		recvResult{
 			SessionID: sessionHex,
@@ -1008,8 +1060,101 @@ func runRecv(env Env, args []string) error {
 			Files:     len(entries),
 			OutDir:    *outDir,
 			StateDir:  stateShown,
+			Capture:   captured,
 		},
 		human)
+}
+
+// receiveFromFrames reads the binary frames "dhow send" wrote.
+//
+// This is the path that has existed since Phase 20 and is not the optical one:
+// no camera, no detection, frames straight off disk. It stays because it is
+// what the loopback harness, the chaos soak, and every test above the optical
+// layer use, and because an operator who has already captured a stream once
+// can replay it without capturing again.
+func receiveFromFrames(ctx context.Context, env Env, level verbosity, in string, sink *frameSink) (bool, error) {
+	names, err := filepath.Glob(filepath.Join(in, "frame-*.bin"))
+	if err != nil {
+		return false, failf(ExitInput, "listing frames in %s: %w", in, err)
+	}
+	if len(names) == 0 {
+		return false, failf(ExitInput, "no frames found in %s", in)
+	}
+	sort.Strings(names)
+
+	// How many consecutive rejections with nothing accepted before saying so.
+	// Low enough to be noticed early, high enough not to fire on the ordinary
+	// run of unreadable frames at the start of a capture.
+	const captureNoiseWarning = 50
+
+	level.say(env.Stderr, loud, "decoding %d blocks from %d captured frames\n",
+		sink.blocks, len(names))
+
+	for _, name := range names {
+		if ctx.Err() != nil {
+			return true, nil
+		}
+		if level >= loud && sink.accepted == 0 && sink.rejected == captureNoiseWarning {
+			// Frames are arriving and none of them authenticate. That is the
+			// wrong key, not a bad camera angle, and an operator who does not
+			// hear it now will wait out the whole stream to learn it.
+			level.say(env.Stderr, loud,
+				"warning: %d frames read and none accepted; this is what a wrong key looks like\n",
+				sink.rejected)
+		}
+
+		frame, err := os.ReadFile(name)
+		if err != nil {
+			return false, failf(ExitInput, "reading %s: %w", name, err)
+		}
+		if _, err := sink.apply(frame); err != nil {
+			if errors.Is(err, errStopAfter) {
+				return true, nil
+			}
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+// receiveFromCapture runs the optical path: images in, symbols located and
+// decoded, frames pre-filtered, and whatever survives handed to the decoder.
+func receiveFromCapture(
+	ctx context.Context, env Env, level verbosity,
+	source, in string, sessionID [16]byte, dropLate bool, sink *frameSink,
+) (*capture.Stats, bool, error) {
+	src, live, err := openCaptureSource(ctx, env, source, in)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = src.Close() }()
+
+	level.say(env.Stderr, loud, "decoding %d blocks from captured images\n", sink.blocks)
+
+	reader := &capture.Reader{
+		Prefilter: capture.Prefilter{SessionID: sessionID},
+		Buffer:    live && dropLate,
+	}
+	stats, err := reader.Run(ctx, src, sink.apply)
+
+	stopped := ctx.Err() != nil
+	if errors.Is(err, errStopAfter) {
+		return &stats, true, nil
+	}
+	if err != nil {
+		return nil, false, failf(ExitInput, "capturing frames: %w", err)
+	}
+
+	// A capture that read images and found nothing in any of them is worth
+	// saying out loud even at normal verbosity. It is the difference between a
+	// transfer that needs more time and one where the camera is pointed at the
+	// wrong thing, and the counts are the only evidence an operator has.
+	if stats.Frames == 0 && stats.Images > 0 {
+		level.say(env.Stderr, normal,
+			"warning: %d images captured and no frame of this session read from any of them\n",
+			stats.Images)
+	}
+	return &stats, stopped, nil
 }
 
 // extractAtomically unpacks a payload so the output directory either holds the
