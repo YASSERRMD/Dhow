@@ -1,5 +1,42 @@
 # Phase Log
 
+## Phase 37 - Camera capture and QR detection
+
+**Objective:** Dhow's stated purpose is moving a dataset across an air gap by
+showing frames on a screen and reading them with a camera. Thirty-six phases
+built everything above the optical layer and frames still move between the two
+halves through a directory. This phase builds the half that was missing: an
+image arrives, it is binarized, the QR code in it is located and sampled into a
+module grid, the grid is decoded back into the wire frame that was rendered, the
+frame's CRC is checked before it crosses the FFI, and the decoder accepts it.
+Capture sits behind an interface so the source of the images - a directory, a
+pipe, a spawned `ffmpeg` - is a choice rather than a rewrite.
+
+**Gates: redefined, and here is why.** The original pack (Phases 24 and 25) asks
+for recorded video fixtures at three quality levels. Those fixtures do not exist
+in this repository and cannot be recorded in this session: there is no camera,
+no screen to point it at, and a committed video file would be an artifact nobody
+could regenerate or review. Recording them elsewhere and committing the result
+would make the gate depend on binary blobs whose provenance is a sentence in a
+log.
+
+So the gate is redefined: the detection pipeline is driven by **rendered**
+frames - the renderer already produces exactly the images the screen would show
+- with **synthetic degradation** applied to them, standing in for what a camera
+does to a screen. Blur, perspective skew, partial occlusion, motion smear,
+sensor noise, and reduced contrast, each applied at a measured strength, with
+the test asserting the strength at which detection still succeeds rather than
+only that it succeeds somewhere. This is the same kind of substitution Phase 31
+made when it declared the RSS budget a ratio rather than an absolute at 1 GiB,
+and Phase 34 made when it froze the format suite at 2.0 rather than 1.0: the
+property being checked is preserved and the thing that cannot be produced here
+is named rather than faked.
+
+What this does **not** establish is stated plainly in the phase's closing notes
+and in `docs/BACKLOG.md`: synthetic degradation is a model of a camera, not a
+camera. The hardware path - a real sensor, a real lens, a real screen at a real
+distance under real light - remains unexercised.
+
 ## Phase 36 - Release candidate
 
 **Objective:** the last release phase. Every TODO and FIXME in the tree is
