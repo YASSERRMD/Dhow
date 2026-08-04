@@ -99,7 +99,10 @@ pass "rendered ${IMAGE_COUNT} frames as QR codes"
 # this on one picture and it is the only thing that distinguishes a camera
 # problem from a key problem.
 
-FIRST=$(find "$WORK/frames" -name 'frame-*.png' | sort | head -1)
+# A glob rather than `find | sort | head`: head closing the pipe sends
+# SIGPIPE to sort, which pipefail then reports as a failed pipeline.
+set -- "$WORK/frames"/frame-*.png
+FIRST="$1"
 "$DHOW" detect -json "$FIRST" > "$WORK/detect.json" \
     || fail "detect could not read a rendering the tool had just produced"
 grep -q '"is_dhow_frame": true' "$WORK/detect.json" \
