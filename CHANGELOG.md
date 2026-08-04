@@ -7,6 +7,41 @@ the long form, including what each phase found and where it fell short.
 Wire-format changes are marked **BREAKING** and carry a pointer to
 [`proto/migration.md`](proto/migration.md).
 
+## Unreleased
+
+### Phase 37 — Camera capture and QR detection
+
+The half that was missing. A transfer now crosses the optical layer end to end:
+frames rendered as QR codes, located in a captured image, sampled through the
+camera's perspective, decoded, and pre-filtered before they reach the core.
+
+- `dhow recv -source` names where images come from: `frames` (the default, and
+  what every harness above the optical layer uses), `images[:DIR]`, `pipe`, or
+  `cmd:COMMAND` for a live camera. Dhow does not open a camera itself; the
+  capture program does, and writes Netpbm to its standard output.
+- `dhow detect` reads one image and says what is in it, with `-binarized` to
+  write out what the binarizer saw. It is what distinguishes a camera problem
+  from a key problem.
+- `internal/qr` decodes a module grid: format information, unmasking,
+  de-interleaving, and Reed-Solomon over GF(256). **No new dependency**;
+  `go.mod` still has none and `sbom-cli.json` still lists zero components. The
+  decision and what was rejected are in the commit that added it.
+- `internal/optical` turns an image into a module grid, and `internal/capture`
+  supplies the images, counts every drop, and applies the per-frame CRC
+  fast-reject before the FFI crossing that `proto/frame.md` put the CRC there
+  for.
+- `scripts/optical.sh` is a new gate: an end-to-end transfer through the
+  shipped binary's own command line, with a quarter of the captures missing,
+  the wrong key, and another session's screen. Twenty-seven gates now.
+- **Fixed, all predating the phase and found by running the gate:**
+  `cargo clippy -D warnings` and `cargo deny` had both been failing on `main`
+  since the chacha20poly1305 0.11 bump.
+
+**Not done: a camera pointed at a screen.** The detector is driven by rendered
+frames with synthetic degradation, which is a model of a lens and not a lens.
+[B-3](docs/BACKLOG.md) records the measured tolerances and, more usefully, the
+list of things the model does not reproduce.
+
 ## v1.0.0-rc.1 — Phase 36
 
 Format suite **2.0**, C ABI **4**.

@@ -240,6 +240,31 @@ an empty column, because it was relied upon.
 | 39 | The resume parser never panics | Enforced | `fuzz/fuzz_targets/resume_load.rs`, 648M executions in Phase 29 |
 | 40 | Every resume failure is fail-closed | Enforced | `scripts/loopback.sh` asserts exit 2 and no output for both tamper cases |
 
+### Capture and QR detection (added in Phase 37)
+
+The optical layer is where hostile input first arrives, and it is now code
+rather than a directory. Everything in this section runs *before* the frame
+parser, on bytes recovered from a picture that anyone can put in front of the
+camera.
+
+| # | Claim | Status | Evidence |
+|---|-------|--------|----------|
+| 48 | The QR decoder never panics on any module grid | Enforced | `qr` `TestMalformedGridsAreRejected`, `TestAllLightAndAllDarkGrids`, `TestRandomGridsNeverPanic` (noise at eight versions, 200 grids each) |
+| 49 | A symbol too damaged to correct is rejected, never decoded to wrong bytes | Enforced | `qr` `TestOverwhelmingDamageIsRejected` (40 symbols with a quarter of the data area randomised: 40 rejected, 0 silently wrong); `optical` `TestSurvivesEverythingAtOnce` asserts zero wrong across every version |
+| 50 | Reed-Solomon correction is verified, not assumed | Enforced | `rs.go` recomputes the syndromes after Forney and rejects a block that is still not a codeword; exercised by rows 48 and 49 |
+| 51 | A declared segment length is bounded by what the symbol holds before anything is allocated | Enforced | `decode.go` `parseSegments` checks `count*8` against the bits remaining; exercised by `TestRandomGridsNeverPanic`, which asserts no decode returns more bytes than the layout can hold |
+| 52 | A declared image size is bounded before anything is allocated | Enforced | `capture` `TestMalformedNetpbmIsRejected` (absurd and overflowing dimensions, zero sizes, truncated data) |
+| 53 | The image reader consumes exactly one image | Enforced | `capture` `TestNetpbmRoundTripsAndStopsExactly`, which puts a sentinel after the last image; a reader that over-reads loses the start of the next one in a live stream |
+| 54 | Frames of another session are rejected before the FFI crossing | Enforced | `capture` `TestPrefilterAcceptsAndRejects`; end to end by `scripts/optical.sh` and `cli_test::TestRecvFromImagesOfAnotherSession`, both of which fail closed and write nothing |
+| 55 | A frame damaged anywhere the CRC covers is rejected before the FFI crossing | Enforced | `capture` `TestPrefilterCatchesEverySingleByteChange` (every single-bit change to every payload byte) |
+| 56 | A position from an unauthenticated frame never marks a frame as held | Enforced | `reader.go` records a position only after the handler reports the decoder accepted it; a rejected frame increments `Foreign` and is not remembered |
+| 57 | A capture command is not run through a shell | Enforced | `splitCommand` in `cli/internal/cli/capture.go` splits on whitespace with quoting and performs no expansion; the argv is passed to `exec.Command` directly |
+| 58 | Every captured image is accounted for | Enforced | `capture` `Stats.Accounted`, checked by `TestStatsAccountForEveryImage` and `TestBufferedReaderDropsRatherThanBlocks`; shown to bite in Phase 37 by deleting one drop increment |
+
+Row 27 - a shoulder-surfer sees only ciphertext - is unchanged by this section.
+Nothing here decrypts; it recovers the same frame bytes the screen was showing,
+which were ciphertext when the encoder produced them.
+
 ### Build and supply chain
 
 | # | Claim | Status | Evidence |

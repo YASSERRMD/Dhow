@@ -79,13 +79,56 @@ nothing about this defect: the digests are still produced by `pack.writeEntry`
 from the same stream, and the executable bit still comes from the same
 `d.Info()` call. If the cause is in either, it survived the change.
 
+### B-3: the optical path has never met a real camera (Phase 37)
+
+**Severity: unknown until hardware is tried. Not a defect; a gap in evidence.**
+
+Phase 37 built the half that was missing. `recv -source` reads images from a
+directory, a pipe, or a capture program dhow starts; `internal/optical`
+binarizes each image, locates the finder patterns, and samples the symbol
+through the perspective the camera introduced; `internal/qr` turns the module
+grid back into the frame. A transfer crosses the optical layer end to end, in
+`scripts/optical.sh`, in the CLI tests, in the README quickstart, and in the
+operations drill.
+
+**What has not happened is a camera pointed at a screen.** The detector is
+driven by rendered frames - which are exactly the images the screen would show -
+with synthetic degradation standing in for a lens. Measured at 8 pixels per
+module, symbols read through:
+
+| Degradation | Tolerated |
+|-------------|-----------|
+| Defocus | blur radius 0.44 to 0.50 modules |
+| Perspective | far edge shrunk 6% to 12% |
+| Rotation | all 24 angles in 15-degree steps |
+| Motion smear | 1.6 modules at every angle |
+| Occlusion | opaque patch over 8% to 12% of the frame |
+| Vignetting | corners darkened 70% |
+| Contrast | compressed to 40% of full range |
+| Resolution | down to 2 camera pixels per module |
+
+Combined at once, at strengths each individually well inside those limits: 80%
+of captures decode at version 5, 60% at version 12, 10% at version 20, and none
+at version 25. That falloff is why `docs/OPERATIONS.md` recommends staying at or
+below version 12.
+
+**What the model does not reproduce**, and therefore what is untested:
+
+- Rolling-shutter skew during a screen refresh, which tears a frame across the
+  sensor rather than blurring it. The most likely thing to be wrong.
+- Moire between the sensor's pixel grid and the screen's.
+- Chromatic aberration at the edges of a cheap lens.
+- Auto-exposure and autofocus hunting, which is time-varying rather than fixed.
+- Display gamma and LCD subpixel structure.
+- Whatever a real capture tool's pixel format conversion does.
+
+Closing this needs a camera, a screen, and somebody to run
+`scripts/optical.sh`'s equivalent by hand: `dhow display` on one machine,
+`dhow recv -source "cmd:ffmpeg ..."` on another, and `dhow detect -binarized`
+on the captures that fail. **Do not close it on the synthetic evidence.** The
+whole point of the entry is that the evidence is a model.
+
 ## Deferred
-
-### B-3: camera capture and QR detection do not exist
-
-Frames move between the two halves through a directory. Everything above the
-optical layer is exercised end to end without hardware, but the tool cannot yet
-run across a real air gap. `README.md` and `docs/OPERATIONS.md` both say so.
 
 ### B-7: no fuzz target reaches `dhow-ffi` (Phase 29)
 
@@ -201,17 +244,32 @@ can be diagnosed rather than argued about.
 Phase 36 tagged **v1.0.0-rc.1** rather than v1.0.0. Two things must be true
 before the version number stops being a claim the software does not support:
 
-1. **B-3 — the camera path.** Dhow's stated purpose is moving a dataset across
-   an air gap by showing frames on a screen and reading them with a camera. The
-   camera half does not exist. Everything above the optical layer is exercised
-   end to end, and a 1.0.0 would still be a tool that cannot do the thing it is
-   for. This is the blocker.
+1. **B-3 — the camera path.** ~~The camera half does not exist.~~ **Phase 37
+   built it.** A transfer crosses the optical layer end to end and the tool can
+   now do the thing it is for.
+
+   What remains is narrower and is still a blocker: **no part of that path has
+   met a real camera.** The detector is driven by rendered frames with
+   synthetic degradation, and the model does not reproduce rolling-shutter skew,
+   moire against the sensor grid, or an autofocus that hunts. A 1.0.0 whose
+   central claim rests on a model of the hardware rather than the hardware is
+   the same kind of number this project has spent thirty-seven phases declining
+   to put on things.
+
+   This one needs a camera and a screen rather than more code. See B-3 for what
+   to run.
 
 2. **B-1 — the unreproduced chaos failure.** Its own entry says "treat as high
    until reproduced". 2,960 rounds have not reproduced it and absence at that
    count bounds how common it is, not whether it exists. Shipping a 1.0.0 of a
    data courier with an open possible-correctness defect would be putting a
    number on something that has not been settled.
+
+Phase 37 did not change this decision, and deliberately did not tag anything.
+Whether the synthetic evidence is enough is a judgement about how much risk a
+deployment carries, and that belongs to the operator rather than to the
+engineer who wrote the model. `git tag -a v1.0.0` on `main` is a one-line
+change if they disagree.
 
 Neither is a reason to withhold a release candidate. A release candidate is
 exactly the artifact for software that is complete in every respect except the

@@ -31,19 +31,40 @@ How the pieces fit, and why the seams are where they are.
                           ═════════════▼═══════════════════╧═════════════
                                        │                   │
                               ┌────────▼────────┐   ┌──────┴───────┐
-                              │ render to QR    │   │ detect QR    │
-                              │ Go              │   │ NOT BUILT    │
+                              │ render to QR    │   │ decode QR    │
+                              │ render          │   │ qr           │
                               └────────┬────────┘   └──────▲───────┘
+                                       │                   │
+                              ┌────────▼────────┐   ┌──────┴───────┐
+                              │ pace and show   │   │ locate+sample│
+                              │ display         │   │ optical      │
+                              └────────┬────────┘   └──────▲───────┘
+                                       │                   │
+                                       │            ┌──────┴───────┐
+                                       │            │ image source │
+                                       │            │ capture      │
+                                       │            └──────▲───────┘
                                        │                   │
                                     screen ─ ─ ─ ─ ─ ─ ▶ camera
                                        (the air gap)
 ```
 
 Everything above the double line is Rust and is where correctness lives.
-Everything below is Go and is where the machine's peripherals live. The camera
-half of the bottom row does not exist yet; frames move between the two halves
-through a directory, which exercises every layer above the optical one without
-hardware. See [B-3](BACKLOG.md).
+Everything below is Go and is where the machine's peripherals live.
+
+The receiving column reads bottom to top: `capture` yields images from a
+directory, a pipe, or a program dhow starts; `optical` binarizes each one,
+locates the finder patterns, and samples the symbol through the perspective the
+camera introduced; `qr` turns that grid of modules back into the frame that was
+rendered; and the frame's CRC is checked on the Go side before it crosses the
+ABI, because most of what a camera sees is a repeat or a misread and a four-byte
+comparison is cheaper than a crossing.
+
+Dhow does not open the camera itself. `capture` names a *source* of images, and
+the live one is a program dhow starts - `ffmpeg` against `avfoundation` or
+`v4l2`. What remains unexercised is a real lens pointed at a real screen; the
+detector is driven by rendered frames with synthetic degradation.
+[B-3](BACKLOG.md).
 
 ## Why the seam is there
 
@@ -54,8 +75,8 @@ verify, resume-state serialization. `dhow-codec` and `dhow-crypt` both carry
 [`cargo geiger` confirms zero unsafe expressions in either](THREAT-MODEL.md#cargo-geiger).
 
 **Go owns everything whose failure is visible immediately.** The CLI, flags,
-progress output, terminal rendering, file system walking, and eventually camera
-capture. A bug here produces a wrong message or a missing file; a bug above the
+progress output, terminal rendering, file system walking, camera capture, and
+QR detection. A bug here produces a wrong message or a missing file; a bug above the
 line produces a dataset that is quietly not the one that was sent.
 
 **Go never holds key material.** Keys cross the boundary as opaque handles and
@@ -83,6 +104,9 @@ nothing depends on `dhow-ffi` except Go.
 | `internal/pack` | Directory to deterministic archive, and traversal-safe extraction |
 | `internal/render` | QR modules to a PNG or a terminal |
 | `internal/display` | The frame loop, pacing, and the calibration preamble |
+| `internal/capture` | Where images come from, the drop policy, and the pre-FFI frame filter |
+| `internal/optical` | An image to a module grid: binarize, locate, sample |
+| `internal/qr` | A module grid back to the bytes: format info, unmask, de-interleave, Reed-Solomon |
 | `internal/resume` | The on-disk journal and its index |
 | `internal/log` | A structured logger that is silent on the data path |
 | `internal/errors` | Error wrapping conventions |
@@ -174,9 +198,9 @@ kept in step.
 
 ## What is not built
 
-- **Camera capture and QR detection.** Everything above the optical layer is
-  exercised end to end without hardware, but the tool cannot yet run across a
-  real air gap. [B-3](BACKLOG.md).
+- **A camera pointed at a screen.** The optical path is built and exercised end
+  to end, on rendered frames with synthetic degradation standing in for a lens.
+  No part of it has met real optics. [B-3](BACKLOG.md).
 - **Streaming encode and decode.** Both halves hold the whole payload in memory;
   measured at 10.4x the dataset to send and 6.4x to receive.
   [B-6, B-8](BACKLOG.md), and [the numbers](BENCHMARKS.md).
