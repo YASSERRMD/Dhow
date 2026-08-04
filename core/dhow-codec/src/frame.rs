@@ -274,19 +274,38 @@ pub struct Frame {
 impl Frame {
     /// Builds a frame, computing the MAC using the session key.
     pub fn build(header: &FrameHeader, payload: &[u8], session_key: &[u8; 32]) -> Self {
+        Self::build_owned(header, payload.to_vec(), session_key)
+    }
+
+    /// Builds a frame from a payload the caller is finished with.
+    ///
+    /// The encoder receives each symbol as a freshly serialized `Vec` and has
+    /// no further use for it, so copying it into the frame doubles the live
+    /// bytes for no reason. At one symbol that is nothing; across a whole
+    /// stream it is a second copy of the payload.
+    pub fn build_owned(header: &FrameHeader, payload: Vec<u8>, session_key: &[u8; 32]) -> Self {
         let mac = header.compute_mac(session_key);
         let mut h = *header;
         h.set_mac(mac);
-        Self {
-            header: h,
-            payload: payload.to_vec(),
-        }
+        Self { header: h, payload }
     }
 
     /// Serializes the entire frame (header + payload) to a byte vector.
     pub fn to_vec(&self) -> Vec<u8> {
         let mut buf = self.header.to_vec();
         buf.extend_from_slice(&self.payload);
+        buf
+    }
+
+    /// Serializes the frame, consuming it.
+    ///
+    /// Distinct from [`Frame::to_vec`] because a caller turning a whole stream
+    /// into bytes has to free each frame as it goes. Borrowing instead means
+    /// the frames and their serialized forms are both live at once, which is
+    /// the payload twice over.
+    pub fn into_vec(mut self) -> Vec<u8> {
+        let mut buf = self.header.to_vec();
+        buf.append(&mut self.payload);
         buf
     }
 

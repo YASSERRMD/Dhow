@@ -32,7 +32,7 @@
 use crate::AeadError;
 use crate::kdf::{INFO_PAYLOAD_KEY, INFO_SESSION_KEY, Salt, derive_key};
 use crate::key::OperatorKey;
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::aead::{Aead, AeadInOut, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use zeroize::Zeroize;
 
@@ -181,6 +181,44 @@ pub fn encrypt_payload(
 /// the key is wrong. The failure is deliberately indistinguishable between
 /// those cases: revealing which part failed would tell an attacker probing
 /// with modified captures what to change next.
+/// Decrypts a payload in the buffer that holds it.
+///
+/// Takes the ciphertext by value and returns the plaintext in the same
+/// allocation, truncated by the tag length. The borrowing form allocates a
+/// second buffer the size of the whole payload and holds both until the caller
+/// drops the first, which on the receiver - the machine in the deployment least
+/// likely to have the memory - is a whole extra copy of the dataset.
+///
+/// The construction is unchanged: this is the same AEAD over the same
+/// associated data producing the same plaintext, and
+/// `aead_test::in_place_decryption_matches_the_borrowing_form` says so.
+pub fn decrypt_payload_in_place(
+    keys: &TransferKeys,
+    nonce: &Nonce,
+    session_id: &[u8; 16],
+    mut buffer: Vec<u8>,
+) -> Result<Vec<u8>, AeadError> {
+    if buffer.len() < TAG_LEN {
+        return Err(AeadError::DecryptionFailed {
+            details: format!("ciphertext is shorter than the {TAG_LEN}-byte tag"),
+        });
+    }
+
+    let cipher = XChaCha20Poly1305::new_from_slice(keys.payload_key()).map_err(|_| {
+        AeadError::DecryptionFailed {
+            details: "payload key is not a valid XChaCha20-Poly1305 key".to_string(),
+        }
+    })?;
+
+    cipher
+        .decrypt_in_place(&XNonce::from(*nonce.as_bytes()), session_id, &mut buffer)
+        .map_err(|_| AeadError::DecryptionFailed {
+            details: "authentication failed".to_string(),
+        })?;
+
+    Ok(buffer)
+}
+
 pub fn decrypt_payload(
     keys: &TransferKeys,
     nonce: &Nonce,

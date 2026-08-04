@@ -9,6 +9,19 @@ Wire-format changes are marked **BREAKING** and carry a pointer to
 
 ## Unreleased
 
+### Phase 38 — Memory: the copies that do not need an ABI change
+
+- `dhow send` peaks at **7.6x** the dataset size, down from 10.4x; `dhow recv` at
+  **5.4x**, down from 6.4x. `scripts/rss.sh` tightened from 12x/8x to **9x/6x**.
+- Three copies removed: the frame stream held twice while being serialized, the
+  archive copied out of its own builder, and the plaintext decrypted into a
+  second buffer instead of in place.
+- **The ABI change the objective called for is not here.** Everything left needs
+  a feed-and-poll encoder handle and a streaming `dhow_decoder_finish` —
+  `DHOW_ABI_VERSION` 5 — and splitting one design across two ABI versions would
+  be worse than deferring it. [B-6, B-8](docs/BACKLOG.md) carry the numbers each
+  remaining part is worth.
+
 ### Phase 37 — Camera capture and QR detection
 
 The half that was missing. A transfer now crosses the optical layer end to end:

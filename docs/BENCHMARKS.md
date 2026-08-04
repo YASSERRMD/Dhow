@@ -13,7 +13,7 @@ needs more resident memory than the machine has does not run slowly, it fails.
 ```bash
 make bench                       # criterion, and the Go benchmarks
 scripts/rss.sh                   # peak RSS at 16 MiB, against the gate's budget
-scripts/rss.sh 1024 12 8         # the real thing, if you have the minutes
+scripts/rss.sh 1024 9 6          # the real thing, if you have the minutes
 ```
 
 `scripts/gate.sh` builds the benchmarks without running them to completion — a
@@ -51,34 +51,43 @@ cheaper one regress by ninety percent before anything failed.
 Apple M4, macOS 26, release build, 16 MiB dataset, `-symbol-size 1320 -blocks 8
 -overhead 10`. Three consecutive runs varied by less than 2%.
 
-| Path | Peak RSS | Ratio | Budget |
-|------|---------:|------:|-------:|
-| `dhow send` | 166.9 MiB | **10.4x** | 12x |
-| `dhow recv` | 102.2 MiB | **6.4x** | 8x |
+| Path | Peak RSS | Ratio | Budget | Was, before Phase 38 |
+|------|---------:|------:|-------:|---------------------:|
+| `dhow send` | 121.1 MiB | **7.6x** | 9x | 10.4x |
+| `dhow recv` | 85.8 MiB | **5.4x** | 6x | 6.4x |
 
-At 64 MiB the ratios fall to 9.1x and 5.9x as the fixed overhead amortises, so
-the 16 MiB figures are the conservative end.
+At 64 MiB the ratios fall to 6.1x and 4.8x as the fixed overhead amortises, so
+the 16 MiB figures are the conservative end. Send varies by about 0.8x between
+runs at 16 MiB - the allocator's high-water mark depends on when it returns
+pages - which is what the gap between the measurement and the budget is for.
 
-**What this implies for 1 GiB**: roughly **9 GiB resident to send** and **6 GiB
-to receive**. That is not a good number. It is the honest one, and the
-components are known:
+**What this implies for 1 GiB**: roughly **7 GiB resident to send** and **5 GiB
+to receive**. Still not a good number. It is the honest one, and the components
+are known:
 
-| Copy | Where | Cost |
-|------|-------|-----:|
-| The archive | `pack.Create` builds it into a `strings.Builder` | 1x, plus up to 1x transient while the builder grows |
-| The payload | `[]byte(archive.String())` copies the builder out | 1x |
-| The ciphertext | `encrypt_payload` returns a new buffer | 1x |
-| The frames | `Pipeline::encode_to_bytes` holds every frame at once | ~1.15x at a 1320-byte symbol |
-| Go's heap | never returned to the OS during the run | the high-water mark of all of the above |
+| Copy | Where | Cost | Phase 38 |
+|------|-------|-----:|----------|
+| The archive | `pack.Create` builds it into a `bytes.Buffer` | 1x, plus up to 1x transient while the buffer grows | still there |
+| ~~The payload~~ | ~~`[]byte(archive.String())` copies the builder out~~ | ~~1x~~ | **removed**: `Buffer.Bytes()` aliases |
+| The ciphertext | `encrypt_payload` returns a new buffer | 1x | still there - the plaintext belongs to Go and cannot be encrypted where it lies |
+| The frames | `Pipeline::encode_to_bytes` holds every frame at once | ~1.15x at a 1320-byte symbol | halved: the prepared frames are consumed rather than borrowed, so the stream is no longer live twice |
+| Go's heap | never returned to the OS during the run | the high-water mark of all of the above | still there |
 
 None of that is a leak or a tuning problem. It is a design that assumes the
-payload fits in memory, which is stated in `docs/BACKLOG.md` as **B-6** and is
-what a streaming encoder would fix. Fixing it means an encoder that takes a
-reader rather than a slice, which is an FFI change and a phase of its own.
+payload fits in memory, stated in `docs/BACKLOG.md` as **B-6**.
+
+**What is left needs an ABI change.** Two copies remain on the send path and
+neither can go without one: the archive is Go's and the ciphertext is Rust's, so
+one of them has to cross, and the frame stream is materialised in full because
+`dhow_encoder_frame` indexes an array rather than generating on demand. Both are
+fixed by the same thing - a feed-and-poll encoder handle replacing the
+`payload`/`payload_len` pair in `dhow_encoder_new`, which is `DHOW_ABI_VERSION`
+5.
 
 The receive side has the same shape one copy shallower: the decoder holds the
-symbols, reassembles the ciphertext, decrypts to a plaintext, and copies that
-into Go for extraction. It is recorded as **B-8**.
+symbols, reassembles the ciphertext, decrypts it **in place** as of Phase 38,
+and copies the plaintext into Go for extraction. That last copy is the one an
+ABI change removes. Recorded as **B-8**.
 
 ## What was found by measuring
 

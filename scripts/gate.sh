@@ -180,7 +180,7 @@ run_gate "benchmarks build" \
              && cd '$CLI_DIR' && go test ./internal/pack/ -run '^\$' -bench . -benchtime 1x >/dev/null"
 
 run_gate "peak RSS budget" \
-    bash -c "'$ROOT/scripts/rss.sh' 16 12 8 >/dev/null"
+    bash -c "'$ROOT/scripts/rss.sh' 16 9 6 >/dev/null"
 
 # --- Marker triage ---
 #

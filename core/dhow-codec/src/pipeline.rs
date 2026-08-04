@@ -235,7 +235,7 @@ impl Pipeline {
                     &serialized,
                 );
                 frames.push(PreparedFrame {
-                    frame: Frame::build(&header, &serialized, &self.session_key),
+                    frame: Frame::build_owned(&header, serialized, &self.session_key),
                 });
             }
 
@@ -246,11 +246,17 @@ impl Pipeline {
     }
 
     /// Encodes a payload and serializes each frame to bytes.
+    ///
+    /// Consumes the prepared frames as it goes rather than borrowing them. The
+    /// borrowing version held the whole stream twice - once as `PreparedFrame`
+    /// and once as bytes - at a moment when the ciphertext it came from was
+    /// also still live. For a transfer with sixty per cent repair overhead
+    /// that second copy is about 1.7 times the dataset.
     pub fn encode_to_bytes(&self, payload: &[u8]) -> Result<Vec<Vec<u8>>, CodecError> {
         Ok(self
             .encode(payload)?
-            .iter()
-            .map(|f| f.frame.to_vec())
+            .into_iter()
+            .map(|f| f.frame.into_vec())
             .collect())
     }
 
