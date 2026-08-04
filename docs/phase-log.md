@@ -1,6 +1,10 @@
 # Phase Log
 
-## Phase 38 - Streaming encode and decode
+## Phase 38 - Memory: the copies that do not need an ABI change
+
+**Named for what it did.** The objective it was given was streaming encode and
+decode, which is `DHOW_ABI_VERSION` 5; that is not finished and the deviation
+section below says so.
 
 **Objective:** both halves hold the whole payload in memory, several times over.
 Measured at the start of this phase, on a 16 MiB dataset: **`send` peaks at
@@ -19,6 +23,88 @@ means a different composition - a chunked STREAM - and that is a wire-format
 break of a suite this project froze two phases ago and published a compatibility
 policy for. So "streaming" here means what can be done underneath the frozen
 format, and the phase log says which copies remain and why.
+
+### Result
+
+| Path | Before | After | Budget, before | Budget, now |
+|------|-------:|------:|---------------:|------------:|
+| `dhow send` | 10.44x | **7.57x** | 12x | **9x** |
+| `dhow recv` | 6.40x | **5.37x** | 8x | **6x** |
+
+At 64 MiB, 6.13x and 4.82x. For a 1 GiB transfer that is roughly 7 GiB to send
+and 5 GiB to receive, down from 9 and 6.
+
+Three copies went, each measured on its own:
+
+1. **The frame stream was live twice.** `encode_to_bytes` borrowed the prepared
+   frames and collected their serialized bytes, so both existed at once - at a
+   moment when the ciphertext they came from was also still resident. Consuming
+   the iterator frees each frame as it is converted. 10.44x -> 9.85x.
+2. **The archive was copied out of its own builder.** `pack.Create` streams into
+   a writer and `runSend` immediately un-streamed it with
+   `[]byte(builder.String())`, which cannot alias because a string is immutable.
+   A `bytes.Buffer` hands the buffer back. 9.85x -> 8.43x.
+3. **The plaintext was decrypted into a second buffer.** `dhow_decoder_finish`
+   owns the ciphertext and nothing reads it afterwards, so it is now decrypted
+   in place. 6.40x -> 5.39x on the receive side.
+
+The third is the one that needed care, because it changes the route through a
+cryptographic primitive on the receiver's path. Two tests hold it: one compares
+the in-place and borrowing forms byte for byte from empty to 64 KiB, because a
+round-trip test that used only one route would not notice a divergence; the
+other checks a flipped byte fails in place exactly as it does borrowing,
+including that the prefix decrypted before the tag failed is not returned.
+
+### Deviation: the ABI change is not in this phase
+
+**The phase pack, and the handover prompt, call for `DHOW_ABI_VERSION` 5: a
+feed-and-poll encoder handle replacing the `payload`/`payload_len` pair in
+`dhow_encoder_new`, and a streaming `dhow_decoder_finish`. That is not here.**
+
+What is here is everything that could be done without it, which turned out to
+be most of the ratio and none of the design. What is left cannot be done without
+it, and the reason is worth stating precisely rather than as a promise:
+
+- The archive is Go's memory and the ciphertext is Rust's, so one of them has to
+  cross the boundary as a whole buffer. Encrypting in place on the send side is
+  not available for the same reason it *was* available on the receive side:
+  there, the buffer was already Rust's. Worth about 2x.
+- `dhow_encoder_frame` indexes an array built up front. Generating frame `i` on
+  demand from retained RaptorQ encoders - which `raptorq` supports - removes the
+  whole frame stream from the high-water mark. Worth about 1.7x.
+- `dhow_decoder_finish` copies the whole plaintext into a Go buffer. A
+  `pack.Extract` that reads from a reader is the easier half and on its own
+  saves nothing, because the plaintext is already in that buffer by the time
+  Extract sees it.
+
+All three are one change: the same handle, the same ABI bump, `gen_header.sh`,
+`check_abi.sh`, and the Go-side assertion in `cli/internal/ffi/ffi_test.go`.
+Splitting it across two phases would mean two ABI versions for one design, and
+this project has spent thirty-eight phases not doing the smaller versions of
+that. It is written up in **B-6** and **B-8** with the numbers each part is
+worth.
+
+The honest summary: this phase is named for what it did, the objective it was
+given is not finished, and `scripts/rss.sh` should be tightened again when the
+rest lands or nothing a gate can see will have changed.
+
+### Deviation: 6 commits
+
+Three measured changes, a gate tightening, a lint fix, and this log. The pack's
+floor is twenty; padding six real changes into twenty would be the behaviour
+Phases 30 to 36 declined and recorded instead.
+
+### Gate run
+
+```
+=== GATE SUMMARY ===
+  Passed:  27
+  Failed:  0
+  Skipped: 0
+ALL GATES PASSED
+```
+
+The tightened budget is inside it: `scripts/rss.sh 16 9 6`.
 
 ## Phase 37 - Camera capture and QR detection
 
