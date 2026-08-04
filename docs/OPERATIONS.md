@@ -17,7 +17,7 @@ sender                                    receiver
 dhow keygen        (once, shared key)  ──▶  the same operator.key
 dhow keygen -kind identity (once)      ──▶  sender.pub only
 dhow send          pack, encrypt, sign, encode
-dhow display       loop frames on screen  ──▶  camera
+dhow display       loop frames on screen  ──▶  camera  ──▶  dhow recv -source
                                                dhow recv    capture, decode, extract
                                                dhow verify  check the dataset
 ```
@@ -259,6 +259,99 @@ $ dhow recv -verbose ...
 Seven blocks and one stuck at six while the frame count climbs is the
 signature.
 
+## The camera
+
+Dhow does not open a camera. Opening one is platform work — AVFoundation on
+macOS, V4L2 on Linux, Media Foundation on Windows — and every one of those is
+already solved by tools you can install. `recv -source` instead names where
+images come from:
+
+| `-source` | Reads | Use it for |
+|-----------|-------|------------|
+| `frames` (default) | `frame-*.bin` in `-in` | Testing, and replaying a stream you already have |
+| `images[:DIR]` | image files in `DIR` or `-in` | A capture already written to disk |
+| `pipe` | Netpbm images on standard input | A capture tool you pipe in yourself |
+| `cmd:COMMAND` | Netpbm images from a program dhow starts | **A live camera** |
+
+The capture program must write a stream of Netpbm (`pgm` or `ppm`) images to its
+standard output. PNG will not work: a PNG decoder reads past the end of one
+image and loses the start of the next.
+
+```bash
+# macOS. `ffmpeg -f avfoundation -list_devices true -i ""` lists the cameras.
+dhow recv ... -source "cmd:ffmpeg -f avfoundation -framerate 10 -i 0 \
+    -f image2pipe -vcodec pgm -"
+
+# Linux
+dhow recv ... -source "cmd:ffmpeg -f v4l2 -framerate 10 -i /dev/video0 \
+    -f image2pipe -vcodec pgm -"
+```
+
+The command is split on whitespace, with quoting honoured for a device name
+that contains a space. It is **not** run through a shell: no pipes, no
+expansion, no substitution. If you need those, put them in a script and name
+the script.
+
+### Dropping
+
+While detection is working on one image, the camera keeps producing them. By
+default `recv` keeps only the newest and counts the rest as dropped, which is
+right for a camera: the sender loops the whole stream, so a stale frame carries
+nothing a fresh one does not.
+
+Pass `-drop=false` when replaying a *recording* through `-source pipe` or
+`cmd:`. A recording is read as fast as the process can go, and the default
+policy discards most of it — measured on a 60-frame stream, 9 frames survived.
+
+### Reading the counts
+
+```
+captured  4820 images (301 dropped)
+read      1140 frames (2103 unreadable, 0 foreign, 12 damaged, 1264 repeats)
+```
+
+| Bucket | Means | What to do |
+|--------|-------|------------|
+| dropped | Detection is slower than the camera | Lower the camera frame rate, or accept it: the stream loops |
+| unreadable | No symbol found, or found and not decodable | Aim, focus, lighting. Run `dhow detect` on one saved image |
+| foreign | A symbol that is not a frame of this session | Another transfer's screen, or a replay of an old one |
+| damaged | A frame of this session whose CRC failed | The picture is marginal; more light or a lower QR version |
+| repeats | A frame already accepted | Normal after the first pass, and most of a long capture |
+
+Zero read and thousands unreadable is a camera problem. Zero read and thousands
+*foreign* is the wrong screen. Zero read with frames accepted climbing slowly is
+just a slow transfer.
+
+### Diagnosing one picture
+
+```bash
+dhow detect -binarized ./seen ./capture.png
+```
+
+It says whether a symbol was found, at what version and level, and whether it is
+a dhow frame and of which session. `-binarized` writes what the binarizer saw,
+which is the fastest way to see a threshold that has eaten one corner of the
+symbol — invisible in any count and obvious at a glance.
+
+### Choosing a QR version for a camera
+
+Measured against synthetic degradation rather than a real lens (see
+[B-3](BACKLOG.md)), with a combination of blur, perspective, motion, vignetting,
+contrast loss, and noise each individually well within tolerance:
+
+| Version | Modules | Captures that decoded |
+|--------:|--------:|----------------------:|
+| 5 | 37 | 80% |
+| 12 | 65 | 60% |
+| 20 | 97 | 10% |
+| 25 | 117 | 0% |
+
+**Stay at or below version 12** unless the capture conditions are good and you
+have checked them. A larger version carries more per frame and needs
+proportionally more camera resolution per module to do it; at 8 pixels per
+module a clean capture reads down to about 2 camera pixels per module, and every
+degradation eats into that margin.
+
 ## Physical setup *(hardware; not yet automated)*
 
 - **Distance and framing.** The QR code should fill most of the camera frame
@@ -292,8 +385,9 @@ dhow send -key operator.key -identity ./sender.key -in ./dataset -out ./frames \
     -symbol-size 1320 -blocks 11 -overhead 60
 dhow display -in ./frames -signer ./sender.pub -fps 30 -qr-version 30
 
-# receiver
+# receiver, reading a camera
 dhow recv -key operator.key -signer ./sender.pub -in ./frames -out ./received \
+    -source "cmd:ffmpeg -f v4l2 -framerate 10 -i /dev/video0 -f image2pipe -vcodec pgm -" \
     -state ./.dhow-state -verbose
 dhow verify -in ./frames -signer ./sender.pub -dir ./received
 ```
@@ -316,7 +410,11 @@ Always run `verify` afterwards, and again later if the dataset matters. See
 | `recv` exits 3 before reading any frame, naming `manifest.bin` | The manifest was not signed by the identity in `-signer`, or it was altered. | Confirm the right `sender.pub` was copied and its fingerprint matches what `dhow send` printed. If it does, stop: the stream was altered or someone else produced it. |
 | `recv` exits 2 saying there is no `manifest.bin` | The frames came from a build that wrote an unsigned `transfer.json`. | Re-run `dhow send`. There is no conversion; see `proto/migration.md`. |
 | `recv` exits 4, zero blocks complete, high rejection count | Frames are being read but not authenticated — wrong key. | Confirm both sides used the same `operator.key`. This is the *operator* key, not the identity: a wrong identity fails at the manifest, before a frame is read. Under `-verbose` the receiver says this outright once fifty frames have been rejected with none accepted. |
-| `recv` exits 4, zero frames accepted at all | Nothing is being captured. | Check framing and focus. Scan the calibration pattern with a phone. |
+| `recv` exits 4, zero frames accepted at all | Nothing is being captured. | Check framing and focus. Scan the calibration pattern with a phone. Save one capture and run `dhow detect -binarized` on it. |
+| `recv` reports thousands unreadable and nothing read | The symbol is not being found: framing, focus, or a version too large for the distance. | `dhow detect` on one saved image says which. Drop to a lower `-qr-version`. |
+| `recv` reports frames as `foreign` | The camera is looking at another transfer's screen, or a replay of an old one. | Compare the session fingerprint the display shows against the one `send` printed. |
+| `recv` reads almost nothing from a recorded stream | The default drops images while detection is busy, which is right for a camera and wrong for a recording. | Pass `-drop=false`. |
+| `recv -source cmd:` exits 2 naming the capture program | The program is missing, the camera is in use, or the device index is wrong. | The program's own error is included in the message. `ffmpeg -f avfoundation -list_devices true -i ""` lists cameras on macOS. |
 | `recv` exits 4, most blocks complete, one stuck | Periodic loss landing on the block period. | Change `-blocks` to a nearby prime and re-send. Raising `-overhead` will not help. |
 | `recv` exits 4, all blocks climbing slowly | Ordinary loss; the transfer is just slow. | Let it run. The stream loops. Consider a lower QR version or better lighting. |
 | Many rejected frames, blocks still completing | Partial captures and blur. Normal. | Ignore unless the accept rate is unusably low. |
