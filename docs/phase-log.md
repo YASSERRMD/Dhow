@@ -1,5 +1,104 @@
 # Phase Log
 
+## Phase 35 - Documentation completion
+
+**Objective:** the documentation this project has is good where it exists and
+has three holes. There is no architecture document, so the only way to learn how
+the pieces fit is to read them in the right order and guess which order that is.
+There is no FFI guide, so a caller binding the C ABI from something other than
+Go has the generated header and nothing else. And there is no CHANGELOG, so the
+only record of what changed and when is a 3,000-line phase log written for a
+different purpose. This phase fills those three and makes the README accurate
+about what the tool does and does not do, with a quickstart a script runs.
+
+**Gates:** every document links to and from the others; the README's quickstart
+is executed by `scripts/quickstart.sh` rather than believed; the CHANGELOG is
+derived from the phase ledger on `main` rather than remembered.
+
+### The README described the tool and gave nobody a way to use it
+
+It was accurate. Every sentence in it was true, it named the limits honestly,
+and it contained **no commands at all** - a reader who wanted to try the thing
+had to find `docs/OPERATIONS.md` and reconstruct the sequence from a guide
+written for someone already running transfers.
+
+It now opens with the seven commands that constitute a transfer, and
+`scripts/quickstart.sh` runs exactly those commands. The same idea as
+`scripts/drill.sh` for the operations guide, and for the same reason:
+documentation drifts from code silently, and the only way to notice is to
+execute it.
+
+The script checks the README's *claims* as well as its commands - that `keygen`
+prints the fingerprint operators are told to compare, that `verify` names the
+signer, and that a transfer signed by another identity is refused and writes
+nothing. A claim in a README that nothing checks is a claim that will quietly
+stop being true.
+
+### The status section leads with the costs
+
+The old status section listed what the tool does and one thing it does not. The
+new one leads with three limits, all measured rather than estimated:
+
+- no camera path, so it cannot yet run across a real air gap;
+- roughly 9 GiB resident to send a 1 GiB dataset and 6 GiB to receive;
+- RaptorQ at about 690 MiB/s, which is what sets a transfer's wall clock rather
+  than the screen.
+
+A README that lists what a tool does and not what it costs is an advertisement.
+The second and third are only sayable because Phase 31 measured them.
+
+### The architecture document
+
+The seam between Rust and Go has been in the master spec since Phase 1 and has
+never been explained anywhere a reader would look. The stated rule - **Rust owns
+everything whose failure would be silent, Go owns everything whose failure is
+visible immediately** - is the one sentence that makes the rest of the layout
+follow, and it was not written down.
+
+It also covers the three integrity layers and what each is *for*, which is not
+obvious from any of them alone: the CRC is a fast reject on a channel that is
+mostly noise, the MAC keeps a foreign session out of the decoder before RaptorQ
+sees it, and the signature is the only one that answers *who*.
+
+### The FFI guide
+
+For a caller binding the C ABI from something other than Go. It leads with
+linking the static archive rather than the dylib, because both land in the same
+directory, most linkers prefer the dynamic one given `-ldhow_ffi`, and the
+result is a binary that starts on exactly one machine.
+
+That is not a hypothetical warning. It is what this project's own release build
+did until Phase 33 measured it, and a guide that did not lead with it would be
+setting up every reader for the same defect.
+
+### The CHANGELOG
+
+Derived from the merge commits on `main` rather than remembered, one entry per
+phase, with wire-format breaks marked and pointed at `proto/migration.md`. The
+phase log is 3,000 lines written for a different purpose - recording what each
+phase found - and is the wrong document to hand someone asking what changed.
+
+### Gate output
+
+25 checks, up from 24: the README quickstart.
+
+```
+$ ./scripts/gate.sh
+=== GATE SUMMARY ===
+  Passed:  25
+  Failed:  0
+  Skipped: 0
+ALL GATES PASSED
+```
+
+Every relative link across all 15 Markdown files resolves; checked by walking
+them rather than by clicking.
+
+### Deviation: 4 atomic commits
+
+The objective, two new documents, the README with its verifying script, and the
+log. As in Phases 30 to 34.
+
 ## Phase 34 - Format spec freeze and a conformance suite
 
 **Objective:** `proto/` claims to be the single source of truth for every wire

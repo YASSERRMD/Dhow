@@ -127,6 +127,15 @@ run_gate "govulncheck" \
 run_gate "loopback end-to-end" \
     bash -c "'$ROOT/scripts/loopback.sh' 2 20 >/dev/null"
 
+# --- README ---
+#
+# A quickstart that does not work is the first thing a reader tries and the
+# first impression the project makes. Same idea as the drill below: the only
+# way to notice documentation drifting from code is to execute it.
+
+run_gate "README quickstart" \
+    bash -c "'$ROOT/scripts/quickstart.sh' >/dev/null"
+
 # --- Operations guide ---
 #
 # Follows docs/OPERATIONS.md from a cold start, so the guide fails the build
