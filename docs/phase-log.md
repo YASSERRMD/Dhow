@@ -1,5 +1,20 @@
 # Phase Log
 
+## Phase 35 - Documentation completion
+
+**Objective:** the documentation this project has is good where it exists and
+has three holes. There is no architecture document, so the only way to learn how
+the pieces fit is to read them in the right order and guess which order that is.
+There is no FFI guide, so a caller binding the C ABI from something other than
+Go has the generated header and nothing else. And there is no CHANGELOG, so the
+only record of what changed and when is a 3,000-line phase log written for a
+different purpose. This phase fills those three and makes the README accurate
+about what the tool does and does not do, with a quickstart a script runs.
+
+**Gates:** every document links to and from the others; the README's quickstart
+is executed by `scripts/quickstart.sh` rather than believed; the CHANGELOG is
+derived from the phase ledger on `main` rather than remembered.
+
 ## Phase 34 - Format spec freeze and a conformance suite
 
 **Objective:** `proto/` claims to be the single source of truth for every wire
