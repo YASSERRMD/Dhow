@@ -1370,13 +1370,13 @@ func runVerify(env Env, args []string) error {
 		"manifest verifies against %s (%s); checking %d files in %s against it\n",
 		*signerPath, signer, len(inventory), *dir)
 
-	problems, checked, bytes := inspectDataset(*dir, inventory)
+	problems, checked, bytesRead := inspectDataset(*dir, inventory)
 	ok := len(problems) == 0
 
 	var b strings.Builder
 	if ok {
 		fmt.Fprintf(&b, "session   %s\nsigner    %s\nfiles     %d\nbytes     %d\nresult    OK\n",
-			sessionHex, signer, checked, bytes)
+			sessionHex, signer, checked, bytesRead)
 	} else {
 		fmt.Fprintf(&b, "session   %s\nsigner    %s\nfiles     %d checked of %d\nresult    FAILED\n",
 			sessionHex, signer, checked, len(inventory))
@@ -1401,7 +1401,7 @@ func runVerify(env Env, args []string) error {
 			Signer:    signer,
 			Files:     len(inventory),
 			Checked:   checked,
-			Bytes:     bytes,
+			Bytes:     bytesRead,
 			Problems:  problems,
 		},
 		b.String()); err != nil {
