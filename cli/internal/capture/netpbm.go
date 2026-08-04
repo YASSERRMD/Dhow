@@ -125,8 +125,8 @@ func readToken(r *bufio.Reader) (string, error) {
 			}
 			return "", err
 		}
-		switch {
-		case c == '#':
+		switch c {
+		case '#':
 			// A comment runs to the end of the line, and may appear between
 			// any two header fields.
 			for {
@@ -138,7 +138,7 @@ func readToken(r *bufio.Reader) (string, error) {
 					break
 				}
 			}
-		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+		case ' ', '\t', '\n', '\r':
 			if len(token) > 0 {
 				return string(token), nil
 			}

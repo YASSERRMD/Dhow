@@ -65,7 +65,7 @@ func Sample(b *Bitmap) ([]*qr.Grid, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: %d finder pattern candidates", ErrNoSymbol, len(candidates))
 	}
-	topLeft, topRight, bottomLeft, _ := orderPatterns(trio)
+	topLeft, topRight, bottomLeft, _ := orderPatterns(&trio)
 
 	// Measured along the symbol's own axes rather than taken from the scan
 	// lines that found the patterns, because a scan line crosses a rotated

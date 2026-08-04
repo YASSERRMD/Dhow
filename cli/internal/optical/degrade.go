@@ -85,7 +85,7 @@ func Blur(img *image.Gray, radius float64) *image.Gray {
 // under it. Distinct from defocus because it is directional: it destroys the
 // module grid along one axis and leaves it intact along the other, which is a
 // different problem for the detector than uniform softening.
-func MotionBlur(img *image.Gray, length float64, angleDegrees float64) *image.Gray {
+func MotionBlur(img *image.Gray, length, angleDegrees float64) *image.Gray {
 	if length <= 1 {
 		return copyGray(img)
 	}
@@ -225,7 +225,7 @@ func Noise(img *image.Gray, sigma float64, rng *rand.Rand) *image.Gray {
 // grey and whose white is light grey, which is what a screen photographed
 // through glare looks like. This is what the local binarizer exists for, and
 // what a fixed global threshold fails on.
-func Contrast(img *image.Gray, scale float64, offset float64) *image.Gray {
+func Contrast(img *image.Gray, scale, offset float64) *image.Gray {
 	out := copyGray(img)
 	for i, p := range out.Pix {
 		out.Pix[i] = clampByte((float64(p)-128)*scale + 128 + offset)

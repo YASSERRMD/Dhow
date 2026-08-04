@@ -25,7 +25,7 @@ type transform struct {
 }
 
 // apply maps a point through the transform.
-func (t *transform) apply(x, y float64) (float64, float64) {
+func (t *transform) apply(x, y float64) (imageX, imageY float64) {
 	denominator := t.a13*x + t.a23*y + t.a33
 	if denominator == 0 {
 		// A point on the horizon of the projection. It has no image; the

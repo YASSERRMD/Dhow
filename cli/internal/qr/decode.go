@@ -134,7 +134,7 @@ func readFormatInfo(g *Grid) (Level, int, error) {
 	first, second := formatBitPositions(g.Size)
 
 	var bestBits, bestDistance = -1, 16
-	for _, positions := range [][15][2]int{first, second} {
+	for _, positions := range []*[15][2]int{&first, &second} {
 		raw := 0
 		for i, p := range positions {
 			if g.At(p[0], p[1]) {

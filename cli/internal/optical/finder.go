@@ -273,7 +273,7 @@ func selectThree(candidates []pattern) ([3]pattern, bool) {
 		for j := i + 1; j < len(sorted); j++ {
 			for k := j + 1; k < len(sorted); k++ {
 				trio := [3]pattern{sorted[i], sorted[j], sorted[k]}
-				if score, ok := scoreTrio(trio); ok && score < bestScore {
+				if score, ok := scoreTrio(&trio); ok && score < bestScore {
 					bestScore, best = score, trio
 				}
 			}
@@ -290,7 +290,7 @@ func selectThree(candidates []pattern) ([3]pattern, bool) {
 // corners of a square, so the two legs from the corner nearest the other two
 // should be of equal length and at a right angle - which perspective distorts
 // but does not abolish.
-func scoreTrio(trio [3]pattern) (float64, bool) {
+func scoreTrio(trio *[3]pattern) (float64, bool) {
 	sizes := [3]float64{trio[0].moduleSize, trio[1].moduleSize, trio[2].moduleSize}
 	mean := (sizes[0] + sizes[1] + sizes[2]) / 3
 	if mean <= 0 {
@@ -337,7 +337,7 @@ func scoreTrio(trio [3]pattern) (float64, bool) {
 // depends on handedness, which a cross product answers - and getting it wrong
 // would sample the symbol mirrored, which decodes to nothing rather than to
 // something subtly wrong.
-func orderPatterns(trio [3]pattern) (topLeft, topRight, bottomLeft pattern, ok bool) {
+func orderPatterns(trio *[3]pattern) (topLeft, topRight, bottomLeft pattern, ok bool) {
 	d01 := distance(trio[0], trio[1])
 	d12 := distance(trio[1], trio[2])
 	d02 := distance(trio[0], trio[2])
