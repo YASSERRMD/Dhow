@@ -37,6 +37,7 @@ clean:
 spec-check:
 	python3 scripts/check_spec.py
 	python3 scripts/conformance_test.py
+	python3 scripts/conformance_cli.py
 
 vectors:
 	python3 scripts/gen_vectors.py
