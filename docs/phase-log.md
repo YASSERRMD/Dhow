@@ -1,5 +1,25 @@
 # Phase Log
 
+## Phase 38 - Streaming encode and decode
+
+**Objective:** both halves hold the whole payload in memory, several times over.
+Measured at the start of this phase, on a 16 MiB dataset: **`send` peaks at
+10.44x the dataset size and `recv` at 6.40x**, which for a 1 GiB transfer is
+roughly 9 GiB and 6 GiB - the second on the machine least likely to have it,
+since the receiver is deliberately off every network and is rarely the newest
+one in the building. This phase removes the copies that can be removed without
+breaking a wire format that was frozen at 2.0 in Phase 34, measures what is
+left, and tightens `scripts/rss.sh` so the improvement is a gate rather than a
+number in a log.
+
+**The constraint that shapes the whole phase:** the payload is encrypted with
+XChaCha20-Poly1305 as a single AEAD message, and the receiver cannot verify one
+byte of it until the whole tag is checked. A genuinely streaming construction
+means a different composition - a chunked STREAM - and that is a wire-format
+break of a suite this project froze two phases ago and published a compatibility
+policy for. So "streaming" here means what can be done underneath the frozen
+format, and the phase log says which copies remain and why.
+
 ## Phase 37 - Camera capture and QR detection
 
 **Objective:** Dhow's stated purpose is moving a dataset across an air gap by
